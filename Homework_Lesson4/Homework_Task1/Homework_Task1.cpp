@@ -6,11 +6,15 @@ using namespace std;
 
 class Figure {
 protected:
-    int info=0;
-    string name = "Фигура";
+    int count;
+    string name;
 public:
+    Figure() {
+        count = 0;
+        name = "Фигура";
+    }
     virtual void get_info() {
-        cout << name << ":" << info << endl;
+        cout << name << ":" << count << endl;
     }
 
 
@@ -18,16 +22,16 @@ public:
 
 class Trinangle : public Figure {
 public:
-    Trinangle(int a) {
-        info = a;
+    Trinangle() {
+        count = 3;
         name = "Треугольник";
     }
 };
 
 class Chetirehegolnic : public Figure {
 public:
-    Chetirehegolnic(int a) {
-        info = a;
+    Chetirehegolnic() {
+        count = 4;
         name = "Четырехугольник";
     }
 };
@@ -36,8 +40,9 @@ int main()
 {
     setlocale(LC_ALL, "ru");
     Figure f;
-    Trinangle T(3);
-    Chetirehegolnic C(4);
+    Trinangle T;
+    Chetirehegolnic C;
+    cout << "Количество сторон: "<<endl;
     f.get_info();
     T.get_info();
     C.get_info();
