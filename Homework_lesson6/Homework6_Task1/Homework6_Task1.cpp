@@ -2,6 +2,10 @@
 
 #include <iostream>
 using namespace std;
+
+int add(int a, int b) {
+	return a + b;
+}
 #define MODE 1
 #ifndef MODE
 #error "необходимо определить MODE"
@@ -16,7 +20,6 @@ int main()
 #if MODE==0
 	cout << "Работаю в режиме тренировки";
 #elif MODE==1
-#define add(a,b) ((a)+(b))
 	cout << "Работаю в боевом режиме"<<endl;
 	int a, b;
 	cout << "Введите число 1: ";
