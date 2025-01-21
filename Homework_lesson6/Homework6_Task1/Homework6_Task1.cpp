@@ -3,17 +3,18 @@
 #include <iostream>
 using namespace std;
 
-int add(int a, int b) {
-	return a + b;
-}
+
 #define MODE 1
 #ifndef MODE
 #error "необходимо определить MODE"
 
 
 #else
-
-
+#if MODE ==1
+int add(int a, int b) {
+	return a + b;
+}
+#endif
 int main()
 {
 	setlocale(LC_ALL, "ru");
@@ -32,4 +33,4 @@ int main()
 #endif 
 }
 
-#endif // !MODE
+#endif 
