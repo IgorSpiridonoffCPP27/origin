@@ -11,7 +11,7 @@ Trinangle::Trinangle(int a, int b, int c, int A, int B, int C) {
         this->ugol_C = C;
     }
     else {
-        throw SumTriAngle();
+        throw MyException("Ошбика в сумме углов треугольника");
     }
 
 

@@ -26,7 +26,7 @@ int main()
 {
     setlocale(LC_ALL, "ru");
     try {
-        Trinangle tr(11, 22, 33, 50, 30, 120);
+        Trinangle tr(11, 22, 33, 50, 10, 120);
         print_info(&tr);
         PrymoiTrinangle pr(10, 20, 30, 50, 60, 80);
         print_info(&pr);
@@ -45,41 +45,8 @@ int main()
         Romb ro(11, 22, 33, 44, 50, 30, 120, 80);
         print_info(&ro);
     }
-    catch (const RS& ex) {
-
-        ex.what();
-    }
-    catch (const RB& ex) {
-
-        ex.what();
-    }
-    catch (const AngleC90& ex) {
-
-        ex.what();
-    }
-    catch (const SumTriAngle& ex) {
-
-        ex.what();
-    }
-    catch (const KV& ex) {
-
-        ex.what();
-    }
-    catch (const Romba& ex) {
-
-        ex.what();
-    }
-    catch (const Prymoi& ex) {
-
-        ex.what();
-    }
-    catch (const Parall& ex) {
-
-        ex.what();
-    }
-    catch (const SumChetireAngle& ex) {
-
-        ex.what();
+    catch (const MyException& a) {
+        a.what();
     }
     
 }

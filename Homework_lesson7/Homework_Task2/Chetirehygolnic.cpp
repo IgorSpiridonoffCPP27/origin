@@ -13,7 +13,7 @@ Chetirehygolnic::Chetirehygolnic(int a, int b, int c, int d, int A, int B, int C
         this->ugol_D = D;
     }
     else {
-        throw SumChetireAngle();
+        throw MyException("Ошибка в сумме углов четырехугольника");
     }
 
 
