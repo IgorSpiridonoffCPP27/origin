@@ -1,1 +1,14 @@
-﻿  Homework_Task3.vcxproj -> C:\Users\User\Desktop\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Homework_lesson7\Homework_Task2\x64\Debug\Homework_Task3.exe
+﻿  Chetirehygolnic.cpp
+  EXception.cpp
+  Homework_Task3.cpp
+C:\Users\User\Desktop\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Homework_lesson7\Homework_Task2\Homework_Task3.cpp(49,15): warning C4834: удаление возвращаемого значения функции с атрибутом [[nodiscard]]
+  Parallelogram.cpp
+  PrymoiChetirehygolnic.cpp
+  PrymoiTrinangle.cpp
+  RBTrinangle.cpp
+  RSTrinangle.cpp
+  Romb.cpp
+  SquareChetirehygolnic.cpp
+  Trinangle.cpp
+  Создание кода...
+  Homework_Task3.vcxproj -> C:\Users\User\Desktop\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Homework_lesson7\Homework_Task2\x64\Debug\Homework_Task3.exe

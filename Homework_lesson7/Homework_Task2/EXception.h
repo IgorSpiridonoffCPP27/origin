@@ -3,11 +3,10 @@
 #include <exception>
 using namespace std;
 
-class MyException : public exception {
+class MyException : public domain_error {
 public: 
-	const char* message;
-	MyException(const char* message);
-	const char* what() const override;
+	using domain_error::domain_error;
+	MyException(const string& _Message);
 	
 	
 };
