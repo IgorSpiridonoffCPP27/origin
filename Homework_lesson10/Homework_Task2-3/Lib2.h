@@ -1,7 +1,6 @@
 #pragma once
 #include "string"
-
-namespace Task2 {
+namespace Lib2 {
 	using namespace std;
 	class Leaver {
 	public:
