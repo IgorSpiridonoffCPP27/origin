@@ -1,0 +1,6 @@
+# ninja log v5
+5	184	7602956368641421	build.ninja	c98783ea64e9cf83
+148	1103	7602952277404985	CMakeFiles/TaskLibExe.dir/TaskLibClient.cpp.obj	f44cd7d38cbea02c
+36	538	7602953227467560	CMakeFiles/TASK_Library_Static.dir/Task1Lib.cpp.obj	34ae3ce7637d9069
+538	668	7602953228145713	TASK_Library_Static.lib	134c07da4f8403ea
+668	1610	7602953234987742	TaskLibExe.exe	9fcc0f9c45c23e5b

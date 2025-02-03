@@ -1,0 +1,69 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.22.0"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "TASKLIB1",
+					"targetIndexes" : 
+					[
+						0,
+						1
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "TASK_Library_Static::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-TASK_Library_Static-Debug-846aabc89f6beb4ebb36.json",
+					"name" : "TASK_Library_Static",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "TaskLibExe::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-TaskLibExe-Debug-78792310697688abd052.json",
+					"name" : "TaskLibExe",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/\u041a\u0443\u0440\u0441 \u0420\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a \u043d\u0430 \u0421++/\u0411\u0430\u0437\u043e\u0432\u043e\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0438\u0440\u043e\u0432\u043d\u0438\u0435 \u0432 \u0421++/Homework_base_programming/Homework_lesson10/Homework_Task1/out/build/x64-Debug",
+		"source" : "D:/\u041a\u0443\u0440\u0441 \u0420\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a \u043d\u0430 \u0421++/\u0411\u0430\u0437\u043e\u0432\u043e\u0435 \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0438\u0440\u043e\u0432\u043d\u0438\u0435 \u0432 \u0421++/Homework_base_programming/Homework_lesson10/Homework_Task1"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}

@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.0)
+project(TASKLIB1)
+add_library(TASK_Library_Static STATIC Task1Lib.h Task1Lib.cpp)
+add_executable(TaskLibExe TaskLibClient.cpp)
+target_link_libraries(TaskLibExe TASK_Library_Static)

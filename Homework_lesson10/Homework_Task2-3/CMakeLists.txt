@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.0)
+project(TASK2LIB)
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+add_library(TASK2LIB_DYNAMIC SHARED TASK2LIB.h TASK2LIB.cpp)
+add_executable(Task2Eexe TASK2Client.cpp)
+target_link_libraries(Task2Eexe TASK2LIB_DYNAMIC)

@@ -1,0 +1,4 @@
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson10/Homework_Task2/out/build/x64-Debug/CMakeFiles/TASK2LIB_DYNAMIC.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson10/Homework_Task2/out/build/x64-Debug/CMakeFiles/Task2Eexe.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson10/Homework_Task2/out/build/x64-Debug/CMakeFiles/edit_cache.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson10/Homework_Task2/out/build/x64-Debug/CMakeFiles/rebuild_cache.dir
