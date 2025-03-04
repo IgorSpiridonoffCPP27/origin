@@ -1,3 +1,0 @@
-C:/Users/User/Desktop/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson9/Homework_Task1/out/build/x64-Debug/CMakeFiles/my_first_cmake_program.dir
-C:/Users/User/Desktop/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson9/Homework_Task1/out/build/x64-Debug/CMakeFiles/edit_cache.dir
-C:/Users/User/Desktop/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Homework_lesson9/Homework_Task1/out/build/x64-Debug/CMakeFiles/rebuild_cache.dir

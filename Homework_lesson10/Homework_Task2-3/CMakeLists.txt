@@ -1,6 +1,0 @@
-cmake_minimum_required(VERSION 3.22.0)
-project(LIB2)
-set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-add_library(DynamicLib2 SHARED Lib2.cpp Lib2.h)
-add_executable(ClientExe Client.cpp)
-target_link_libraries(ClientExe DynamicLib2)
