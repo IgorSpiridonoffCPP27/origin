@@ -17,7 +17,8 @@ void print_point(const point& point_object) {
 int main()
 {
 	int i;
-	for (i = 0; i < 5; i++) {
+	for (i = 0; i < 5; i++)
+	{
 		point my_point(i, 2 * i);
 		print_point(my_point);
 	}
