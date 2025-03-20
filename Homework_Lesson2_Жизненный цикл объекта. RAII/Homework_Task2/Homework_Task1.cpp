@@ -31,6 +31,8 @@ public:
 	}
 	smart_array& operator=(smart_array& new_arr) {
 		Size = new_arr.Size;
+		delete[] arr;
+		arr = new int[Size];
 		for (int i = 0; i < Size; i++) {
 			arr[i] = new_arr.arr[i];
 		}
@@ -60,8 +62,9 @@ int main()
 		smart_array new_array(2);
 		new_array.add_element(44);
 		new_array.add_element(34);
-		
+
 		arr = new_array;
+
 		
 		
 	}
