@@ -4,25 +4,25 @@ using namespace std;
 
 class smart_array {
 	int* arr;
-	int Size;
-	int i = 0;
+	int Formal_el;
+	int Fact_el = 0;
 public:
 	smart_array(int N) {
-		Size = N;
-		arr = new int[Size];
+		Formal_el = N;
+		arr = new int[Formal_el];
 	}
 	void add_element(int a) {
 		
-		if (i < Size) {
-			arr[i] = a;
-			i++;
+		if (Fact_el < Formal_el) {
+			arr[Fact_el] = a;
+			Fact_el++;
 		}
 		else {
 			throw exception("end memory");
 		}
 	}
 	int get_element(int i2) {
-		if (i2 < Size) {
+		if (i2 < Formal_el) {
 			return arr[i2];
 		}
 		else {
@@ -30,16 +30,17 @@ public:
 		}
 	}
 	smart_array& operator=(smart_array& new_arr) {
-		Size = new_arr.Size;
+		Formal_el = new_arr.Formal_el;
+		Fact_el = new_arr.Fact_el;
 		delete[] arr;
-		arr = new int[Size];
-		for (int i = 0; i < Size; i++) {
+		arr = new int[Formal_el];
+		for (int i = 0; i < Fact_el; i++) {
 			arr[i] = new_arr.arr[i];
 		}
 		return *this;
 	}
 	void print() {
-		for (int i = 0; i < Size;i++) {
+		for (int i = 0; i < Fact_el;i++) {
 			cout << arr[i] << endl;
 		}
 	}
@@ -63,6 +64,7 @@ int main()
 		new_array.add_element(44);
 		new_array.add_element(34);
 
+		
 		arr = new_array;
 
 		
