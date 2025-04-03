@@ -2,213 +2,105 @@
 #include <vector>
 #include <algorithm>
 
-#include <cstring>
-using namespace std;
-
-
 class big_integer {
-	
-	char* str_num;
+private:
+    std::vector<int> digits; 
+
 public:
-	big_integer(const char* str) {
-		size_t len = strlen(str);
-		str_num = new char[len + 1];  
+    
+    big_integer(const std::string& str) {
+        for (auto it = str.rbegin(); it != str.rend(); ++it) {
+            digits.push_back(*it - '0'); 
+        }
+    }
 
-		strcpy_s(str_num, len + 1, str);
-		
-		
+    
+    big_integer() {}
 
-		
-	}
-	~big_integer(){
-		delete[] str_num;
-	}
+    
+    big_integer(big_integer&& other) noexcept : digits(std::move(other.digits)) {}
 
-	big_integer(const big_integer& other) : big_integer(other.str_num) {
+    
+    big_integer& operator=(big_integer&& other) noexcept {
+        if (this != &other) {
+            digits = std::move(other.digits);
+        }
+        return *this;
+    }
 
-	}
-	big_integer(big_integer&& other) noexcept{
-		str_num = other.str_num;
-		
-		other.str_num = nullptr;
-	}
-	big_integer& operator=(const big_integer& other) {
-		if (&other != this) {
-			delete[] str_num;
-			big_integer(other.str_num);
-		}
-		return *this;
-	}
-	big_integer& operator=(big_integer&& other)noexcept {
-		if (&other != this) {
-			delete[] str_num;
-			str_num = other.str_num;
-			delete other.str_num;
-		}
-		return *this;
-	}
+    
+    big_integer operator+(const big_integer& other) const {
+        big_integer result;
+        result.digits.clear();
 
-	void printclass() const{
-		for (int i = (strlen(str_num) - 1);i >= 0;i--) {
-			cout << str_num[i];
-		}
-	}
-	
-	std::string operator+(const big_integer other)const {
-		int razryd = 0;
-		std::vector<int> num_str;
-		
-		if (strlen(str_num) > strlen(other.str_num)) {
-			int razn_len = strlen(str_num) - 1+ (strlen(other.str_num) - 1);
-			for (int i = (strlen(other.str_num) - 1);i >= 0;i--) {
-				if (i == 0) {
-					razn_len = razn_len - i - 1 ;
-				}
-				else{
-					razn_len = razn_len - i;
-				}
-				num_str.push_back(((static_cast<int>(str_num[razn_len])-48) + (static_cast<int>(other.str_num[i]) - 48))%10 + razryd);
-				razryd = ((static_cast<int>(str_num[razn_len]) - 48) + (static_cast<int>(other.str_num[i]) - 48)) / 10;
-			}
-			for (int j = razn_len-1; j >= 0;j--) {
-				if (razryd != 0) {
-					num_str.push_back(((static_cast<int>(str_num[j]) - 48)+ razryd)%10);
-					razryd = ((static_cast<int>(str_num[j]) - 48) + razryd) / 10;
-				}
-				else {
-					razryd = 0;
-					num_str.push_back((static_cast<int>(str_num[j]) - 48));
-				}
-			}
-			string s="";
-			for (auto el = num_str.rbegin(); el != num_str.rend(); el++) {
-				s = s + static_cast<char>(*el+48);
-			}
-			return s;
+        int carry = 0;
+        size_t maxSize = std::max(digits.size(), other.digits.size());
 
-		}
-		else {
-			int razn_len = strlen(other.str_num) - 1 + (strlen(str_num) - 1);
-			for (int i = (strlen(str_num) - 1);i >= 0;i--) {
-				if (i == 0) {
-					razn_len = razn_len - i - 1;
-				}
-				else {
-					razn_len = razn_len - i;
-				}
-				num_str.push_back(((static_cast<int>(other.str_num[razn_len]) - 48) + (static_cast<int>(str_num[i]) - 48)) % 10 + razryd);
-				razryd = ((static_cast<int>(other.str_num[razn_len]) - 48) + (static_cast<int>(str_num[i]) - 48)) / 10;
-			}
-			for (int j = razn_len - 1; j >= 0;j--) {
-				if (razryd != 0) {
-					num_str.push_back(((static_cast<int>(other.str_num[j]) - 48) + razryd) % 10);
-					razryd = ((static_cast<int>(other.str_num[j]) - 48) + razryd) / 10;
-				}
-				else {
-					razryd = 0;
-					num_str.push_back((static_cast<int>(other.str_num[j]) - 48));
-				}
-			}
-			string s = "";
-			for (auto el = num_str.rbegin(); el != num_str.rend(); el++) {
-				s = s + static_cast<char>(*el + 48);
-			}
-			return s;
-		}
+        for (size_t i = 0; i < maxSize || carry; ++i) {
+            int sum = carry;
+            if (i < digits.size()) sum += digits[i];
+            if (i < other.digits.size()) sum += other.digits[i];
 
-	}
-	std::string operator*(const big_integer other)const {
-		string a = str_num;
-		string b = other.str_num;
+            result.digits.push_back(sum % 10);
+            carry = sum / 10;
+        }
 
-		int len_a = a.length(), len_b = b.length();
-		vector<int> result(len_a + len_b, 0);
+        return result;
+    }
 
-		
-		for (int i = len_a - 1; i >= 0; --i) {
-			for (int j = len_b - 1; j >= 0; --j) {
-				int mul = (a[i] - '0') * (b[j] - '0');
-				int pos_low = i + j + 1;
-				int pos_high = i + j;
-				mul += result[pos_low];  
+    
+    big_integer operator*(int num) const {
+        big_integer result;
+        result.digits.clear();
 
-				result[pos_low] = mul % 10;
-				result[pos_high] += mul / 10;
-			}
-		}
+        int carry = 0;
+        for (size_t i = 0; i < digits.size() || carry; ++i) {
+            long long cur = carry + (i < digits.size() ? digits[i] * num : 0);
+            result.digits.push_back(cur % 10);
+            carry = cur / 10;
+        }
 
-		
-		string product;
-		bool leading_zero = true;
-		for (int num : result) {
-			if (leading_zero && num == 0) continue;
-			leading_zero = false;
-			product += (num + '0');
-		}
+        return result;
+    }
 
-		return product.c_str();
+   
+    big_integer operator*(const big_integer& other) const {
+        big_integer result("0");
+        for (size_t i = 0; i < other.digits.size(); ++i) {
+            big_integer temp = (*this * other.digits[i]); 
+            temp.digits.insert(temp.digits.begin(), i, 0); 
+            result = result + temp;
+        }
+        return result;
+    }
 
-	}
-	std::string operator*(int other)const {
-		string a = str_num;
-		if (other == 0) {
-			return "0";
-		}
-
-		string b = "";
-		while (other != 0) {
-			b = b + static_cast<char>(other % 10+48);
-			other = other / 10;
-		}
-
-		int len_a = a.length(), len_b = b.length();
-		vector<int> result(len_a + len_b, 0);
-
-
-		for (int i = len_a - 1; i >= 0; --i) {
-			for (int j = len_b - 1; j >= 0; --j) {
-				int mul = (a[i] - '0') * (b[j] - '0');
-				int pos_low = i + j + 1;
-				int pos_high = i + j;
-				mul += result[pos_low];
-
-				result[pos_low] = mul % 10;
-				result[pos_high] += mul / 10;
-			}
-		}
-
-
-		string product;
-		bool leading_zero = true;
-		for (int num : result) {
-			if (leading_zero && num == 0) continue;
-			leading_zero = false;
-			product += (num + '0');
-		}
-
-		return product.c_str();
-
-	}
-	
-
+    friend std::ostream& operator<<(std::ostream& os, const big_integer& num) {
+        if (num.digits.empty()) {
+            os << "0";
+        }
+        else {
+            for (auto it = num.digits.rbegin(); it != num.digits.rend(); ++it) {
+                os << *it;
+            }
+        }
+        return os;
+    }
 };
 
 
+int main() {
+    setlocale(LC_ALL,"ru");
+    big_integer number1("114575");
+    big_integer number2("78524");
 
-int main()
-{
+    auto result1 = number1 + number2;
+    std::cout << "Сумма: " << result1 << std::endl; 
 
-	auto num1 = big_integer("567");
-	auto num2 = big_integer("1234567");
+    auto result2 = number1 * 2;
+    std::cout << "Умножение на число: " << result2 << std::endl; 
 
-	auto num3 = num1 + num2;
-	auto num4 = num1 * num2;
-	auto num5 = num1 * 2;
+    auto result3 = number1 * number2;
+    std::cout << "Умножение на другой обьект: " << result3 << std::endl; 
 
-
-	cout << num3 << endl;
-	cout << num4 << endl;
-	cout << num5 << endl;
-
-	return 0;
+    return 0;
 }
