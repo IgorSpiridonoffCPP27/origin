@@ -1,0 +1,3 @@
+add_executable(data_logger data_logger.cpp)
+target_link_libraries(data_logger ipc_shared ws2_32)
+set_target_properties(data_logger PROPERTIES EXCLUDE_FROM_ALL TRUE)
