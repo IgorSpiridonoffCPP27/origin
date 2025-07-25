@@ -6,72 +6,77 @@
 
 namespace fs = std::filesystem;
 
-void launch(const std::string& exe_name) {
-    // Получаем абсолютный путь к исполняемому файлу
-    fs::path exe_path = fs::absolute("bin/" + exe_name);
+void launch(const wchar_t* exe_name) {
+    // Получаем путь к текущему исполняемому файлу
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    fs::path current_path = fs::path(path).parent_path();
+    
+    // Ищем в build/bin/Release
+    fs::path exe_path = current_path.parent_path().parent_path() / "bin" / "Release" / exe_name;
 
-    STARTUPINFO si = { sizeof(si) };
+    // Проверяем существование файла
+    if (!fs::exists(exe_path)) {
+        std::wcerr << L"Error: " << exe_path.wstring() << L" not found!\n";
+        return;
+    }
+
+    STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi;
+    
+    std::wstring cmd = L"\"" + exe_path.wstring() + L"\"";
 
-    std::string cmd = "\"" + exe_path.string() + "\"";
-
-    if (!CreateProcess(
+    if (!CreateProcessW(
         NULL,
-        &cmd[0], // Преобразуем в mutable char*
+        &cmd[0],
         NULL,
         NULL,
         FALSE,
         CREATE_NEW_CONSOLE,
         NULL,
-        NULL, // Рабочая директория = директория main_server.exe
+        current_path.wstring().c_str(),
         &si,
         &pi
     )) {
         DWORD error = GetLastError();
-        std::cerr << "Failed to start " << exe_name
-            << ". Error code: " << error << "\n";
-
-        // Вывод расшифровки ошибки
-        LPSTR message = nullptr;
-        FormatMessage(
-            FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-            NULL,
-            error,
-            0,
-            (LPSTR)&message,
-            0,
-            NULL
-        );
-        std::cerr << "System message: " << message << "\n";
-        LocalFree(message);
-    }
-    else {
+        std::wcerr << L"Failed to start " << exe_name 
+                  << L". Error code: " << error << L"\n";
+    } else {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
-        std::cout << "Successfully started " << exe_name << "\n";
+        std::wcout << L"Successfully started " << exe_name << L"\n";
     }
 }
 
 int main() {
-    // Проверяем существование bin/
-    if (!fs::exists("bin")) {
-        fs::create_directory("bin");
-    }
+    // Получаем путь к исполняемым файлам
+    wchar_t path[MAX_PATH];
+    GetModuleFileNameW(NULL, path, MAX_PATH);
+    fs::path bin_path = fs::path(path).parent_path().parent_path().parent_path() / "bin" / "Release";
 
-    // Проверяем существование EXE-файлов
-    for (const auto& exe : { "client_server.exe", "data_logger.exe", "monitor.exe" }) {
-        if (!fs::exists("bin/" + std::string(exe))) {
-            std::cerr << "Error: " << exe << " not found in bin/\n";
+    std::wcout << L"Ищем EXE в: " << bin_path.wstring() << std::endl;
+
+    const wchar_t* executables[] = {
+        L"client_server.exe",
+        L"data_logger.exe",
+        L"monitor.exe"
+    };
+
+    // Проверяем наличие всех EXE-файлов
+    for (const auto& exe : executables) {
+        if (!fs::exists(bin_path / exe)) {
+            std::wcerr << L"Critical error: " << exe 
+                      << L" not found in " << bin_path.wstring() << L"\n";
             return 1;
         }
     }
 
     // Запуск компонентов
-    std::thread([]() { launch("client_server.exe"); }).detach();
-    std::thread([]() { launch("data_logger.exe"); }).detach();
-    std::thread([]() { launch("monitor.exe"); }).detach();
+    std::thread([](){ launch(L"client_server.exe"); }).detach();
+    std::thread([](){ launch(L"data_logger.exe"); }).detach();
+    std::thread([](){ launch(L"monitor.exe"); }).detach();
 
-    std::cout << "Main server running. Press Enter to exit...\n";
+    std::wcout << L"Main server running. Press Enter to exit...\n";
     std::cin.get();
 
     // Завершение процессов
