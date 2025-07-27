@@ -1,7 +1,6 @@
 #pragma once
 
-#include <atomic>
-#include <string>
+#include "pch.h"
 
 /**
  * Глобальный флаг состояния сервера.
@@ -9,7 +8,7 @@
  * Объявлен как extern, так как определяется в .cpp.
  */
 extern std::atomic<bool> server_running;
-
+extern std::atomic<bool> shutdown_complete;
 /**
  * Запускает поток для управления сервером.
  * Ожидает ввода 'q' в консоли для graceful shutdown.

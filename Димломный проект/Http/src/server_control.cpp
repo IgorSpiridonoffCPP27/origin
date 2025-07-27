@@ -1,45 +1,47 @@
-#include "pch.h"            // Прекомпилированные заголовки (должен быть первым!)
+#include "pch.h"
 #include "server_control.h"
-#include "utils.h"          // Для set_utf8_locale()
+#include "utils.h"
 #include <iostream>
 #include <thread>
+#include <chrono>
+#include <stdlib.h> // Для exit()
 
-// Инициализация глобального флага
 std::atomic<bool> server_running(true);
-
-// ================ Реализации функций ================
+std::atomic<bool> shutdown_complete(false);
 
 void server_control_thread() {
-    set_utf8_locale();  // Устанавливаем UTF-8 для консоли
+    set_utf8_locale();
     
-    std::cout << 
-        "Сервер запущен. Для остановки введите 'q' и нажмите Enter...\n";
+    std::cout << "Server running. Press 'q'+Enter to stop...\n";
     
     char input;
-    while (server_running.load()) {
-        std::cin.get(input);  // Блокирующее чтение
+    while (server_running) {
+        std::cin.get(input);
         if (input == 'q') {
-            graceful_shutdown("Получена команда остановки");
+            graceful_shutdown("Shutdown command received");
             break;
         }
+        while (std::cin.get() != '\n' && server_running);
     }
 }
 
 void graceful_shutdown(const std::string& message) {
-    // Атомарно устанавливаем флаг остановки
-    bool already_stopped = !server_running.exchange(false);
+    if (!server_running.exchange(false)) return;
     
-    if (already_stopped) {
-        return;  // Сервер уже остановлен
-    }
-    
-    // Логируем причину остановки
     if (!message.empty()) {
-        std::cout << "[SHUTDOWN] " << message << std::endl;
+        std::cout << "\n[SHUTDOWN] " << message << "\n";
     }
     
-    // Дополнительные действия при остановке:
-    // - Можно добавить закрытие сокетов
-    // - Сохранение состояния
-    // - Уведомление клиентов
+    const int countdown_seconds = 5;
+    std::cout << "Window will close in: ";
+    for (int i = countdown_seconds; i > 0; --i) {
+        std::cout << i << "... " << std::flush;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    std::cout << "0. Shutting down.\n";
+    shutdown_complete = true;
+    
+    // Явное завершение программы
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    exit(0);
 }

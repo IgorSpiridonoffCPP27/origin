@@ -1,18 +1,7 @@
 #pragma once
 
-#include <string>
-#include <unordered_map>
-#include <locale>       // Для set_utf8_locale()
-#include <atomic>       // Для server_running (если нужно)
-#include <codecvt>      // Для convert_to_utf8()
+#include "pch.h"   // Для convert_to_utf8()
 
-// Forward declarations для Boost.Beast (если используются в объявлениях)
-namespace boost {
-namespace beast {
-namespace http {
-    template<class Body> class request;
-    template<class Body> class response;
-}}} // namespace boost::beast::http
 
 /**
  * Парсит строку вида "key1=value1&key2=value2" в std::unordered_map.

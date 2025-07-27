@@ -1,21 +1,20 @@
 cmake_minimum_required(VERSION 3.10)
 project(BeastExample)
 
-
+# Указываем C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_PCH_INSTANTIATE_TEMPLATES ON)
+set(CMAKE_CXX_EXTENSIONS OFF)  # Отключаем GNU-расширения (для совместимости)
 
-
-# Указываем vcpkg
-set(CMAKE_TOOLCHAIN_FILE "D:/vcpkg/scripts/buildsystems/vcpkg.cmake")
+# Указываем vcpkg (если используется)
+set(CMAKE_TOOLCHAIN_FILE "D:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 
 # Ищем Boost и нужные компоненты
-find_package(Boost REQUIRED COMPONENTS 
+find_package(Boost 1.70 REQUIRED COMPONENTS 
     system 
-    coroutine  # Необходимо для Boost.Asio
-    context    # Необходимо для Boost.Asio
-    date_time  # Может потребоваться для некоторых функций
+    coroutine
+    context
+    date_time
 )
 
 # Ищем OpenSSL
@@ -25,7 +24,7 @@ find_package(OpenSSL REQUIRED)
 find_package(libpqxx REQUIRED)
 
 # Клиент
-add_executable(client client_boost.cpp)
+add_executable(client src/client_boost.cpp)
 target_link_libraries(client PRIVATE 
     Boost::boost
     Boost::system 
@@ -39,21 +38,13 @@ target_link_libraries(client PRIVATE
     libpqxx::pqxx
 )
 
-
-
-
-
 # Сервер
 add_executable(server
-    src/server server_boost.cpp 
+    src/server_boost.cpp 
     src/DBusers.cpp
-    src/utils.cpp
     src/server_control.cpp
+    src/utils.cpp
     src/file_operations.cpp
-)
-
-target_precompile_headers(server PRIVATE
-    src/pch.h
 )
 
 target_link_libraries(server PRIVATE 
@@ -69,7 +60,5 @@ target_link_libraries(server PRIVATE
     libpqxx::pqxx
 )
 
-
-
-#Для тестов
+# Тесты (если нужно)
 add_executable(test test.cpp)
