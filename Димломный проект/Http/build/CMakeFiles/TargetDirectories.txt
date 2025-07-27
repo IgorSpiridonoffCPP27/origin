@@ -1,5 +1,6 @@
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/client.dir
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/server.dir
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/test.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/PACKAGE.dir
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/ALL_BUILD.dir
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/ZERO_CHECK.dir

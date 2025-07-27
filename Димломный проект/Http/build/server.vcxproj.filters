@@ -4,6 +4,9 @@
     <ClCompile Include="D:\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Димломный проект\Http\server_boost.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="D:\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Димломный проект\Http\DBusers.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="D:\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Димломный проект\Http\CMakeLists.txt" />

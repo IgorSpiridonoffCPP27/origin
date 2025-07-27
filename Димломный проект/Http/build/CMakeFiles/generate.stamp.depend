@@ -18,6 +18,7 @@ C:/Program Files/CMake/share/cmake-4.0/Modules/FindBoost.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/FindOpenSSL.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/FindPackageHandleStandardArgs.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/FindPackageMessage.cmake
+C:/Program Files/CMake/share/cmake-4.0/Modules/FindPostgreSQL.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/Internal/CMakeCLinkerInformation.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/Internal/CMakeCXXLinkerInformation.cmake
 C:/Program Files/CMake/share/cmake-4.0/Modules/Internal/CMakeCommonLinkerInformation.cmake
@@ -191,7 +192,13 @@ D:/vcpkg/installed/x64-windows/share/boost_variant2/boost_variant2-targets.cmake
 D:/vcpkg/installed/x64-windows/share/boost_winapi/boost_winapi-config-version.cmake
 D:/vcpkg/installed/x64-windows/share/boost_winapi/boost_winapi-config.cmake
 D:/vcpkg/installed/x64-windows/share/boost_winapi/boost_winapi-targets.cmake
+D:/vcpkg/installed/x64-windows/share/libpqxx/libpqxx-config-version.cmake
+D:/vcpkg/installed/x64-windows/share/libpqxx/libpqxx-config.cmake
+D:/vcpkg/installed/x64-windows/share/libpqxx/libpqxx-targets-debug.cmake
+D:/vcpkg/installed/x64-windows/share/libpqxx/libpqxx-targets-release.cmake
+D:/vcpkg/installed/x64-windows/share/libpqxx/libpqxx-targets.cmake
 D:/vcpkg/installed/x64-windows/share/openssl/vcpkg-cmake-wrapper.cmake
+D:/vcpkg/installed/x64-windows/share/postgresql/vcpkg-cmake-wrapper.cmake
 D:/vcpkg/scripts/buildsystems/vcpkg.cmake
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/CMakeLists.txt
 D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Http/build/CMakeFiles/4.0.3/CMakeCCompiler.cmake

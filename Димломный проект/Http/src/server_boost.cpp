@@ -1,5 +1,5 @@
-#include "header.h"
-
+#include "pch.h"
+#include "DBusers.h"
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
@@ -33,6 +33,20 @@ std::unordered_map<std::string, std::string> extractKeyValues(const std::string&
     return keyValues;
 }
 
+
+std::atomic<bool> server_running(true);
+
+void server_control_thread() {
+    std::cout << "Press 'q' and Enter to stop the server..." << std::endl;
+    char input;
+    while (server_running) {
+        std::cin.get(input);
+        if (input == 'q') {
+            server_running = false;
+            break;
+        }
+    }
+}
 
 void set_utf8_locale() {
     std::locale::global(std::locale("en_US.UTF-8"));
@@ -94,7 +108,7 @@ std::string read_html_main() {
     return buffer.str();
 }
 
-void handle_request(http::request<http::string_body>& req, http::response<http::string_body>& res) {
+void handle_request(http::request<http::string_body>& req, http::response<http::string_body>& res,DBuse&connectiondb) {
     // Устанавливаем UTF-8 для всех ответов
     res.set(http::field::content_type, "text/html; charset=utf-8");
     
@@ -124,6 +138,7 @@ void handle_request(http::request<http::string_body>& req, http::response<http::
                 std::istreambuf_iterator<char>()
             );
             auto keyValues = extractKeyValues(body);
+            connectiondb.add_word_to_tables(keyValues["username"]);
             boost::replace_all(template_html, "{{username}}", keyValues["username"]);
             boost::replace_all(template_html, "{{age}}", keyValues["age"]);
             
@@ -158,51 +173,63 @@ int main() {
     set_utf8_locale();
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
+    DBuse connectiondb("localhost", "HTTP", "test_postgres", "12345678");
+    connectiondb.create_tables();
+    connectiondb.add_unique_constraint();
+
     std::cout << "Using Boost version: " << BOOST_VERSION << std::endl;
+    std::cout << "Server started at http://localhost:8080\n";
 
     try {
         net::io_context ioc{1};
         tcp::acceptor acceptor{ioc, {tcp::v4(), 8080}};
-        std::cout << "Server started at http://localhost:8080\n";
+        
+        // Запускаем поток для управления сервером
+        std::thread control_thread(server_control_thread);
 
-        while (true) {
-            tcp::socket socket{ioc};
-            acceptor.accept(socket);
+        while (server_running) {
+            // Проверяем каждые 100ms, не нужно ли остановить сервер
+            boost::asio::deadline_timer timer(ioc);
+            timer.expires_from_now(boost::posix_time::milliseconds(100));
+            timer.wait();
 
-            beast::error_code ec;
-            beast::flat_buffer buffer;
+            if (!server_running) break;
 
+            // Принимаем новое соединение (неблокирующий режим)
+            tcp::socket socket(ioc);
+            boost::system::error_code ec;
+            acceptor.async_accept(socket, [&](const boost::system::error_code& accept_ec) {
+                ec = accept_ec;
+            });
+            ioc.run_one();
+
+            if (ec) continue; // Пропускаем ошибки accept
+
+            // Обрабатываем запрос
             try {
+                beast::flat_buffer buffer;
                 http::request<http::string_body> req;
-                http::read(socket, buffer, req, ec);
-                
-                if (ec == beast::http::error::end_of_stream) {
-                    continue; // Клиент закрыл соединение - пропускаем
-                }
-                if (ec) {
-                    throw beast::system_error{ec}; // Другие ошибки
-                }
+                http::read(socket, buffer, req);
 
                 http::response<http::string_body> res;
-                handle_request(req, res);
-
-                // Явно закрываем соединение
+                handle_request(req, res, connectiondb);
                 res.set(http::field::connection, "close");
-                http::write(socket, res, ec);
+                http::write(socket, res);
 
+                socket.shutdown(tcp::socket::shutdown_send);
             } catch (const std::exception& e) {
-                std::cerr << "Error: " << e.what() << std::endl;
+                std::cerr << "Connection error: " << e.what() << std::endl;
             }
+        }
 
-    // Гарантированное закрытие сокета
-    socket.shutdown(tcp::socket::shutdown_send, ec);
-    if (ec && ec != beast::errc::not_connected) {
-        std::cerr << "Shutdown error: " << ec.message() << std::endl;
-    }
-}
-    }
-    catch (const std::exception& e) {
+        // Грациозная остановка
+        acceptor.close();
+        ioc.stop();
+        control_thread.join();
+        std::cout << "Server stopped gracefully" << std::endl;
+    } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << "\n";
         return 1;
     }
+    return 0;
 }

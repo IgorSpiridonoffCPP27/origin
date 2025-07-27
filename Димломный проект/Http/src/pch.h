@@ -20,10 +20,14 @@
 #include <map>
 #include <locale>
 #include <codecvt>
-#include <boost/algorithm/string/replace.hpp>
+#include <pqxx/pqxx>
+#include <boost/asio/deadline_timer.hpp>
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
 
-
-
+#include <boost/beast/http/string_body.hpp>
+#include <atomic>
+#include <thread>
 
 #include <cctype>
 #include <iomanip>

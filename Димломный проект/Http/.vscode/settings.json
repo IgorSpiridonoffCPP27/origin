@@ -82,6 +82,7 @@
         "xtree": "cpp",
         "xutility": "cpp",
         "fstream": "cpp",
-        "filesystem": "cpp"
+        "filesystem": "cpp",
+        "deque": "cpp"
     }
 }
