@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="D:\Курс Разработчик на С++\Базовое программировние в С++\Homework_base_programming\Димломный проект\Http3\build\CMakeFiles\0fbc5f6c9e6c4a6f4d59f7cabd3ea3a4\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{0B5E69FF-5225-38DE-B978-2DFB13908DBF}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
