@@ -201,7 +201,8 @@ void DBuse::create_tables() {
             "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
             "url VARCHAR(500) NOT NULL, "
             "html_content TEXT, "
-            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "UNIQUE(word_id, url))"  // Добавляем уникальный constraint
         );
 
         std::cout << "Таблица words и word_urls успешно создана\n";
@@ -209,14 +210,25 @@ void DBuse::create_tables() {
 }
 
 
-void DBuse::save_word_url(int word_id, const std::string& url, const std::string& html_content) {
+bool DBuse::save_word_url(int word_id, const std::string& url, const std::string& html_content) {
+    bool saved = false;
     execute_in_transaction([&](pqxx::work& txn) {
-        txn.exec_params(
-            "INSERT INTO word_urls (word_id, url, html_content) "
-            "VALUES ($1, $2, $3)",
-            word_id, url, html_content
+        // Проверяем, существует ли уже такой URL для этого слова
+        auto exists = txn.exec_params(
+            "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
+            word_id, url
         );
+        
+        if (exists.empty()) {
+            txn.exec_params(
+                "INSERT INTO word_urls (word_id, url, html_content) "
+                "VALUES ($1, $2, $3)",
+                word_id, url, html_content
+            );
+            saved = true;
+        }
     });
+    return saved;
 }
 
 int DBuse::get_word_id(const std::string& word) {
@@ -233,6 +245,17 @@ int DBuse::get_word_id(const std::string& word) {
     return word_id;
 }
 
+bool DBuse::url_exists_for_word(int word_id, const std::string& url) {
+    bool exists = false;
+    execute_in_transaction([&](pqxx::work& txn) {
+        auto result = txn.exec_params(
+            "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
+            word_id, url
+        );
+        exists = !result.empty();
+    });
+    return exists;
+}
 
 void DBuse::add_unique_constraint() {
     // Теперь UNIQUE constraint добавляется сразу при создании таблицы
