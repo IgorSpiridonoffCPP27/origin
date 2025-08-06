@@ -38,6 +38,7 @@ public:
     int get_word_id(const std::string& word);
     bool url_exists_for_word(int word_id, const std::string& url);
     bool save_word_url(int word_id, const std::string& url, const std::string& html_content);
+    
 private:
     pqxx::connection conn;
     void check_column_exists(pqxx::work& txn, const std::string& table, const std::string& column);

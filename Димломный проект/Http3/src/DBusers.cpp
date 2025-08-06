@@ -2,42 +2,48 @@
 #include <iostream>
 #include <atomic>
 #include <mutex>
-DBuse::DBuse(const std::string& host, const std::string& dbname,
-             const std::string& user, const std::string& password) :
-    conn("host=" + host + " dbname=" + dbname + 
-         " user=" + user + " password=" + password + 
-         " client_encoding=UTF8")
+DBuse::DBuse(const std::string &host, const std::string &dbname,
+             const std::string &user, const std::string &password) : conn("host=" + host + " dbname=" + dbname +
+                                                                          " user=" + user + " password=" + password +
+                                                                          " client_encoding=UTF8")
 {
-    if (!conn.is_open()) {
+    if (!conn.is_open())
+    {
         throw std::runtime_error("Не удалось подключиться к БД");
     }
     std::cout << "Успешное подключение к " << conn.dbname() << std::endl;
 }
 
-void DBuse::execute_in_transaction(const std::function<void(pqxx::work&)>& func) {
+void DBuse::execute_in_transaction(const std::function<void(pqxx::work &)> &func)
+{
     pqxx::work txn(conn);
-    try {
+    try
+    {
         func(txn);
         txn.commit();
-    } catch (...) {
+    }
+    catch (...)
+    {
         txn.abort();
         throw;
     }
 }
 
-
-json::json DBuse::get_tables() {
+json::json DBuse::get_tables()
+{
     json::json result;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         pqxx::result tables = txn.exec("SELECT table_name FROM information_schema.tables WHERE table_schema='public'");
-        for (auto row : tables) result.push_back(row[0].as<std::string>());
-    });
+        for (auto row : tables) result.push_back(row[0].as<std::string>()); });
     return result;
 }
 
-json::json DBuse::get_columns(const std::string& table) {
+json::json DBuse::get_columns(const std::string &table)
+{
     json::json result;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         pqxx::result cols = txn.exec_params(
             "SELECT column_name, data_type FROM information_schema.columns "
             "WHERE table_name=$1 AND (column_default IS NULL OR column_default NOT LIKE 'nextval%') "
@@ -49,16 +55,17 @@ json::json DBuse::get_columns(const std::string& table) {
                 {"name", row[0].as<std::string>()},
                 {"type", row[1].as<std::string>()}
             });
-        }
-    });
+        } });
     return result;
 }
 
-json::json DBuse::get_record(const std::string& table, 
-                            const std::string& column, 
-                            const std::string& value) {
+json::json DBuse::get_record(const std::string &table,
+                             const std::string &column,
+                             const std::string &value)
+{
     json::json record;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         pqxx::result result = txn.exec_params(
             "SELECT * FROM " + txn.quote_name(table) + 
             " WHERE " + txn.quote_name(column) + " = " + txn.quote(value)
@@ -70,40 +77,44 @@ json::json DBuse::get_record(const std::string& table,
         
         for (const auto& field : result[0]) {
             record[field.name()] = field.as<std::string>();
-        }
-    });
+        } });
     return record;
 }
 
-bool DBuse::check_auth(const std::string& username, 
-                      const std::string& password) {
+bool DBuse::check_auth(const std::string &username,
+                       const std::string &password)
+{
     bool auth_result = false;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         auto res = txn.exec_params(
             "SELECT 1 FROM users WHERE username=$1 AND password=$2", 
             username, password
         );
-        auth_result = !res.empty();
-    });
+        auth_result = !res.empty(); });
     return auth_result;
 }
 
-void DBuse::check_column_exists(pqxx::work& txn, const std::string& table, const std::string& column) {
+void DBuse::check_column_exists(pqxx::work &txn, const std::string &table, const std::string &column)
+{
     auto res = txn.exec_params(
         "SELECT 1 FROM information_schema.columns "
         "WHERE table_name=$1 AND column_name=$2",
-        table, column
-    );
-    if (res.empty()) {
+        table, column);
+    if (res.empty())
+    {
         throw std::runtime_error("Столбец " + column + " не существует в таблице " + table);
     }
 }
 
-void DBuse::insert_data(const std::string& table, 
-                       const json::json& values, 
-                       json::json& response) {
-    try {
-        execute_in_transaction([&](pqxx::work& txn) {
+void DBuse::insert_data(const std::string &table,
+                        const json::json &values,
+                        json::json &response)
+{
+    try
+    {
+        execute_in_transaction([&](pqxx::work &txn)
+                               {
             // Проверяем существование всех колонок
             for (const auto& [name, value] : values.items()) {
                 check_column_exists(txn, table, name);
@@ -178,18 +189,20 @@ void DBuse::insert_data(const std::string& table,
                     {"message", "Данные успешно добавлены"},
                     {"new_record", new_record}
                 };
-            }
-        });
-    } catch (const std::exception& e) {
+            } });
+    }
+    catch (const std::exception &e)
+    {
         response = {
             {"status", 500},
-            {"message", std::string("Ошибка сервера: ") + e.what()}
-        };
+            {"message", std::string("Ошибка сервера: ") + e.what()}};
     }
 }
 
-void DBuse::create_tables() {
-    execute_in_transaction([&](pqxx::work& txn) {
+void DBuse::create_tables()
+{
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         txn.exec(
             "CREATE TABLE IF NOT EXISTS words("
             "id SERIAL PRIMARY KEY, "
@@ -205,14 +218,14 @@ void DBuse::create_tables() {
             "UNIQUE(word_id, url))"  // Добавляем уникальный constraint
         );
 
-        std::cout << "Таблица words и word_urls успешно создана\n";
-    });
+        std::cout << "Таблица words и word_urls успешно создана\n"; });
 }
 
-
-bool DBuse::save_word_url(int word_id, const std::string& url, const std::string& html_content) {
+bool DBuse::save_word_url(int word_id, const std::string &url, const std::string &html_content)
+{
     bool saved = false;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         // Проверяем, существует ли уже такой URL для этого слова
         auto exists = txn.exec_params(
             "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
@@ -226,54 +239,60 @@ bool DBuse::save_word_url(int word_id, const std::string& url, const std::string
                 word_id, url, html_content
             );
             saved = true;
-        }
-    });
+        } });
     return saved;
 }
 
-int DBuse::get_word_id(const std::string& word) {
+int DBuse::get_word_id(const std::string &word)
+{
     int word_id = -1;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         auto result = txn.exec_params(
             "SELECT id FROM words WHERE word = $1", 
             word
         );
         if (!result.empty()) {
             word_id = result[0][0].as<int>();
-        }
-    });
+        } });
     return word_id;
 }
 
-bool DBuse::url_exists_for_word(int word_id, const std::string& url) {
+bool DBuse::url_exists_for_word(int word_id, const std::string &url)
+{
     bool exists = false;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         auto result = txn.exec_params(
             "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
             word_id, url
         );
-        exists = !result.empty();
-    });
+        exists = !result.empty(); });
     return exists;
 }
 
-void DBuse::add_unique_constraint() {
+void DBuse::add_unique_constraint()
+{
     // Теперь UNIQUE constraint добавляется сразу при создании таблицы
     std::cout << "UNIQUE constraint уже установлен при создании таблицы\n";
 }
 
-void DBuse::add_word_to_tables(const std::string& word) {
-    if (word.empty()) {
+void DBuse::add_word_to_tables(const std::string &word)
+{
+    if (word.empty())
+    {
         std::cerr << "Пустое слово не может быть добавлено\n";
         return;
     }
-    
-    if (word.length() > 100) {
+
+    if (word.length() > 100)
+    {
         std::cerr << "Слово '" << word << "' слишком длинное (макс. 100 символов)\n";
         return;
     }
 
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         try {
             auto result = txn.exec_params(
                 "INSERT INTO words (word) VALUES ($1) "
@@ -296,25 +315,26 @@ void DBuse::add_word_to_tables(const std::string& word) {
                 const int word_id = existing[0]["id"].as<int>();
                 std::cout << "Слово '" << word << "' уже существует. ID: " << word_id << "\n";
             }
-        }
-    });
+        } });
 }
 
-std::vector<std::string> DBuse::get_all_words() {
-        std::vector<std::string> words;
-        execute_in_transaction([&](pqxx::work& txn) {
+std::vector<std::string> DBuse::get_all_words()
+{
+    std::vector<std::string> words;
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
             auto result = txn.exec("SELECT word FROM words ORDER BY id");
             for (auto row : result) {
                 words.push_back(row["word"].as<std::string>());
-            }
-        });
-        return words;
-    }
+            } });
+    return words;
+}
 
-
-std::vector<std::pair<int, std::string>> DBuse::get_new_words_since(int last_id) {
+std::vector<std::pair<int, std::string>> DBuse::get_new_words_since(int last_id)
+{
     std::vector<std::pair<int, std::string>> new_words;
-    execute_in_transaction([&](pqxx::work& txn) {
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
         auto result = txn.exec_params(
             "SELECT id, word FROM words WHERE id > $1 ORDER BY id", 
             last_id
@@ -324,18 +344,18 @@ std::vector<std::pair<int, std::string>> DBuse::get_new_words_since(int last_id)
                 row["id"].as<int>(),
                 row["word"].as<std::string>()
             );
-        }
-    });
+        } });
     return new_words;
 }
 
-int DBuse::get_max_word_id() {
-        int max_id = 0;
-        execute_in_transaction([&](pqxx::work& txn) {
+int DBuse::get_max_word_id()
+{
+    int max_id = 0;
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
             auto result = txn.exec("SELECT COALESCE(MAX(id), 0) FROM words");
-            max_id = result[0][0].as<int>();
-        });
-        return max_id;
-    }
+            max_id = result[0][0].as<int>(); });
+    return max_id;
+}
 
-    
+
