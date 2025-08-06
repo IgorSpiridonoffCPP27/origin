@@ -358,4 +358,17 @@ int DBuse::get_max_word_id()
     return max_id;
 }
 
-
+std::string DBuse::get_full_word_string(const std::string &word)
+{
+    std::string result;
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
+            auto res = txn.exec_params(
+                "SELECT word FROM words WHERE word = $1", 
+                word
+            );
+            if (!res.empty()) {
+                result = res[0][0].as<std::string>();
+            } });
+    return result;
+}
