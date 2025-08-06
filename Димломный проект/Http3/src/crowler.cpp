@@ -49,7 +49,6 @@ std::wstring utf8_to_wstring(const std::string& str) {
     MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size_needed);
     return wstr;
 }
-
 void process_word(DBuse& db, const std::string& word) {
     std::cout << "\nПоиск по слову: " << word << std::endl;
     
@@ -73,15 +72,19 @@ void process_word(DBuse& db, const std::string& word) {
         if (!result.html.empty()) {
             std::cout << "Успешно скачано с конечного URL: " << result.final_url << std::endl;
             
-            // Сохраняем URL в базу данных
-            db.save_word_url(word_id, result.final_url, result.html);
-            
-            // Сохраняем также в файл (опционально)
-            std::wstring wide_filename = utf8_to_wstring(word) + L"_page.html";
-            std::ofstream out(wide_filename, std::ios::binary);
-            out << result.html;
-            std::cout << "HTML сохранен в " << word << "_page.html (" 
-                      << result.html.size() << " байт)" << std::endl;
+            // Проверяем и сохраняем URL, если его ещё нет
+            if (db.save_word_url(word_id, result.final_url, result.html)) {
+                std::cout << "URL сохранен в базу данных" << std::endl;
+                
+                // Сохраняем также в файл (опционально)
+                std::wstring wide_filename = utf8_to_wstring(word) + L"_page.html";
+                std::ofstream out(wide_filename, std::ios::binary);
+                out << result.html;
+                std::cout << "HTML сохранен в " << word << "_page.html (" 
+                          << result.html.size() << " байт)" << std::endl;
+            } else {
+                std::cout << "URL уже существует в базе данных, пропускаем сохранение" << std::endl;
+            }
             
             found = true;
             break;
@@ -92,7 +95,6 @@ void process_word(DBuse& db, const std::string& word) {
         std::cerr << "Не удалось получить результаты для слова: " << word << std::endl;
     }
 }
-
 void monitor_new_words(DBuse& db) {
     int last_processed_id = db.get_max_word_id();
     
