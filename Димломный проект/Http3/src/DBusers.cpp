@@ -1,6 +1,7 @@
 #include "DBusers.h"
 #include <iostream>
-
+#include <atomic>
+#include <mutex>
 DBuse::DBuse(const std::string& host, const std::string& dbname,
              const std::string& user, const std::string& password) :
     conn("host=" + host + " dbname=" + dbname + 
@@ -240,3 +241,43 @@ void DBuse::add_word_to_tables(const std::string& word) {
         }
     });
 }
+
+std::vector<std::string> DBuse::get_all_words() {
+        std::vector<std::string> words;
+        execute_in_transaction([&](pqxx::work& txn) {
+            auto result = txn.exec("SELECT word FROM words ORDER BY id");
+            for (auto row : result) {
+                words.push_back(row["word"].as<std::string>());
+            }
+        });
+        return words;
+    }
+
+
+std::vector<std::pair<int, std::string>> DBuse::get_new_words_since(int last_id) {
+    std::vector<std::pair<int, std::string>> new_words;
+    execute_in_transaction([&](pqxx::work& txn) {
+        auto result = txn.exec_params(
+            "SELECT id, word FROM words WHERE id > $1 ORDER BY id", 
+            last_id
+        );
+        for (auto row : result) {
+            new_words.emplace_back(
+                row["id"].as<int>(),
+                row["word"].as<std::string>()
+            );
+        }
+    });
+    return new_words;
+}
+
+int DBuse::get_max_word_id() {
+        int max_id = 0;
+        execute_in_transaction([&](pqxx::work& txn) {
+            auto result = txn.exec("SELECT COALESCE(MAX(id), 0) FROM words");
+            max_id = result[0][0].as<int>();
+        });
+        return max_id;
+    }
+
+    

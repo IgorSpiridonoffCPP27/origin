@@ -1,0 +1,3 @@
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Парсинг сайтов/build/CMakeFiles/parsinc.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Парсинг сайтов/build/CMakeFiles/ALL_BUILD.dir
+D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Парсинг сайтов/build/CMakeFiles/ZERO_CHECK.dir

@@ -1,0 +1,2 @@
+#pragma code_page(65001)
+1 /* CREATEPROCESS_MANIFEST_RESOURCE_ID */ 24 /* RT_MANIFEST */ "D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Архитектура серверов/out/build/x64-Debug/CMakeFiles/main_server.dir/embed.manifest"

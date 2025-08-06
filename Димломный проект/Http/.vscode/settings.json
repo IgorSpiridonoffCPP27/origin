@@ -83,6 +83,10 @@
         "xutility": "cpp",
         "fstream": "cpp",
         "filesystem": "cpp",
-        "deque": "cpp"
+        "deque": "cpp",
+        "numeric": "cpp",
+        "random": "cpp",
+        "ranges": "cpp",
+        "span": "cpp"
     }
 }

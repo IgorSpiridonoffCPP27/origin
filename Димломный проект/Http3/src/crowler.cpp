@@ -21,7 +21,6 @@
 #include <chrono>
 #include <set>
 
-
 #pragma comment(lib, "shell32.lib")
 
 namespace beast = boost::beast;
@@ -35,8 +34,81 @@ struct DownloadResult {
     std::string final_url;
 };
 
+// Прототип функции
+DownloadResult follow_redirects(const std::string& initial_url, int max_redirects = 5);
 
-DownloadResult follow_redirects(const std::string& initial_url, int max_redirects = 5) {
+// Глобальные переменные для управления потоками
+std::atomic<bool> keep_running(true);
+std::mutex data_mutex;
+std::set<int> processed_word_ids;
+
+// Альтернатива std::wstring_convert (удален в C++17)
+std::wstring utf8_to_wstring(const std::string& str) {
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstr(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size_needed);
+    return wstr;
+}
+
+void process_word(const std::string& word) {
+    std::cout << "\nПоиск по слову: " << word << std::endl;
+    
+    std::vector<std::string> test_urls = {
+        "https://ru.wikipedia.org/wiki/" + word,
+        "https://www.google.com/search?q=" + word,
+        "https://www.britannica.com/search?query=" + word
+    };
+
+    bool found = false;
+    for (const auto& url : test_urls) {
+        std::cout << "Пробуем URL: " << url << std::endl;
+        DownloadResult result = follow_redirects(url);
+        
+        if (!result.html.empty()) {
+            std::cout << "Успешно скачано с конечного URL: " << result.final_url << std::endl;
+            
+            std::wstring wide_filename = utf8_to_wstring(word) + L"_page.html";
+            std::ofstream out(wide_filename, std::ios::binary);
+            out << result.html;
+            std::cout << "HTML сохранен в " << word << "_page.html (" 
+                      << result.html.size() << " байт)" << std::endl;
+            
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found) {
+        std::cerr << "Не удалось получить результаты для слова: " << word << std::endl;
+    }
+}
+
+void monitor_new_words(DBuse& db) {
+    int last_processed_id = db.get_max_word_id();
+    
+    while (keep_running) {
+        try {
+            auto new_words = db.get_new_words_since(last_processed_id);
+            
+            if (!new_words.empty()) {
+                std::lock_guard<std::mutex> lock(data_mutex);
+                for (const auto& [word_id, word] : new_words) {
+                    if (processed_word_ids.insert(word_id).second) {
+                        process_word(word);
+                    }
+                }
+                last_processed_id = db.get_max_word_id();
+            }
+            
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        } catch (const std::exception& e) {
+            std::cerr << "Ошибка в потоке мониторинга: " << e.what() << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+    }
+}
+
+DownloadResult follow_redirects(const std::string& initial_url, int max_redirects) {
     std::string current_url = initial_url;
     DownloadResult result;
 
@@ -120,54 +192,6 @@ DownloadResult follow_redirects(const std::string& initial_url, int max_redirect
     return result;
 }
 
-std::vector<std::string> get_words_from_database(DBuse& db) {
-    std::vector<std::string> words;
-    
-    db.execute_in_transaction([&](pqxx::work& txn) {
-        pqxx::result result = txn.exec("SELECT words FROM words ORDER BY id");
-        
-        for (auto row : result) {
-            words.push_back(row["words"].as<std::string>());
-        }
-    });
-    
-    return words;
-}
-
-
-void process_word(const std::string& word) {
-    std::cout << "\nПоиск по слову: " << word << std::endl;
-    
-    std::vector<std::string> test_urls = {
-        "https://ru.wikipedia.org/wiki/" + word,
-        "https://www.google.com/search?q=" + word,
-        "https://www.britannica.com/search?query=" + word
-    };
-
-    bool found = false;
-    for (const auto& url : test_urls) {
-        std::cout << "Пробуем URL: " << url << std::endl;
-        DownloadResult result = follow_redirects(url);
-        
-        if (!result.html.empty()) {
-            std::cout << "Успешно скачано с конечного URL: " << result.final_url << std::endl;
-            
-            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-            std::wstring wide_filename = converter.from_bytes(word) + L"_page.html";
-            std::ofstream out(wide_filename, std::ios::binary);
-            out << result.html;
-            std::cout << "HTML сохранен в " << word << "_page.html (" << result.html.size() << " байт)" << std::endl;
-            
-            found = true;
-            break;
-        }
-    }
-    
-    if (!found) {
-        std::cerr << "Не удалось получить результаты для слова: " << word << std::endl;
-    }
-}
-
 int main() {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
@@ -176,35 +200,31 @@ int main() {
         DBuse db("localhost", "HTTP", "test_postgres", "12345678");
         
         // Обрабатываем существующие слова
-        std::vector<std::string> processed_words = get_words_from_database(db);
-        std::set<std::string> unique_words(processed_words.begin(), processed_words.end());
-        
-        for (const auto& word : processed_words) {
-            process_word(word);
-        }
-        
-        // Бесконечный цикл проверки новых слов
-        while (true) {
-            std::cout << "\nПроверяем новые слова..." << std::endl;
+        auto initial_words = db.get_all_words();
+        {
+            std::lock_guard<std::mutex> lock(data_mutex);
+            int max_id = db.get_max_word_id();
+            processed_word_ids.insert(max_id);
             
-            // Получаем текущий список слов из базы
-            std::vector<std::string> current_words = get_words_from_database(db);
-            
-            // Находим новые слова
-            for (const auto& word : current_words) {
-                if (unique_words.find(word) == unique_words.end()) {
-                    // Новое слово найдено
-                    process_word(word);
-                    unique_words.insert(word);
-                }
+            for (const auto& word : initial_words) {
+                process_word(word);
             }
-            
-            // Пауза между проверками (например, 30 секунд)
-            std::this_thread::sleep_for(std::chrono::seconds(30));
         }
+        
+        // Запускаем асинхронный мониторинг новых слов
+        std::thread monitor_thread(monitor_new_words, std::ref(db));
+        
+        // Главный поток может делать что-то еще или просто ждать
+        std::cout << "Мониторинг новых слов запущен. Нажмите Enter для выхода...\n";
+        std::cin.get();
+        
+        // Завершение работы
+        keep_running = false;
+        monitor_thread.join();
     }
     catch (const std::exception& e) {
         std::cerr << "Ошибка: " << e.what() << std::endl;
+        keep_running = false;
         system("pause");
         return 1;
     }

@@ -71,10 +71,13 @@ int main() {
         }
     }
 
-    // Запуск компонентов
-    std::thread([](){ launch(L"client_server.exe"); }).detach();
-    std::thread([](){ launch(L"data_logger.exe"); }).detach();
-    std::thread([](){ launch(L"monitor.exe"); }).detach();
+    std::thread([]() {
+        launch(L"data_logger.exe");
+        Sleep(1000); // Ждем 1 секунду
+        launch(L"monitor.exe");
+        Sleep(1000); // Ждем 1 секунду
+        launch(L"client_server.exe");
+        }).detach();
 
     std::wcout << L"Main server running. Press Enter to exit...\n";
     std::cin.get();

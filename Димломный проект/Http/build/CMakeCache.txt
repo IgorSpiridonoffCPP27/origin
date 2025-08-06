@@ -449,6 +449,9 @@ boost_winapi_DIR:PATH=D:/vcpkg/installed/x64-windows/share/boost_winapi
 //The directory containing a CMake configuration file for libpqxx.
 libpqxx_DIR:PATH=D:/vcpkg/installed/x64-windows/share/libpqxx
 
+//The directory containing a CMake configuration file for nlohmann_json.
+nlohmann_json_DIR:PATH=D:/vcpkg/installed/x64-windows/share/nlohmann_json
+
 
 ########################
 # INTERNAL cache entries
@@ -592,6 +595,8 @@ FIND_PACKAGE_MESSAGE_DETAILS_Boost:INTERNAL=[D:/vcpkg/installed/x64-windows/shar
 FIND_PACKAGE_MESSAGE_DETAILS_OpenSSL:INTERNAL=[optimized;D:/vcpkg/installed/x64-windows/lib/libcrypto.lib;debug;D:/vcpkg/installed/x64-windows/debug/lib/libcrypto.lib][D:/vcpkg/installed/x64-windows/include][ ][v3.5.1()]
 //Details about finding PostgreSQL
 FIND_PACKAGE_MESSAGE_DETAILS_PostgreSQL:INTERNAL=[optimized;D:/vcpkg/installed/x64-windows/lib/libpq.lib;debug;D:/vcpkg/installed/x64-windows/debug/lib/libpq.lib][D:/vcpkg/installed/x64-windows/include][ ][v16.9()]
+//Details about finding nlohmann_json
+FIND_PACKAGE_MESSAGE_DETAILS_nlohmann_json:INTERNAL=[D:/vcpkg/installed/x64-windows/share/nlohmann_json/nlohmann_jsonConfig.cmake][v3.12.0()]
 //ADVANCED property for variable: OPENSSL_INCLUDE_DIR
 OPENSSL_INCLUDE_DIR-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: PostgreSQL_INCLUDE_DIR

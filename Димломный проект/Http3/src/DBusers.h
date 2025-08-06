@@ -32,6 +32,9 @@ public:
     void add_unique_constraint();
     void add_word_to_tables(const std::string& word);
     void execute_in_transaction(const std::function<void(pqxx::work&)>& func);
+    std::vector<std::pair<int, std::string>> get_new_words_since(int last_id);
+    int get_max_word_id();
+    std::vector<std::string> get_all_words();
 private:
     pqxx::connection conn;
     void check_column_exists(pqxx::work& txn, const std::string& table, const std::string& column);
