@@ -35,6 +35,8 @@ public:
     std::vector<std::pair<int, std::string>> get_new_words_since(int last_id);
     int get_max_word_id();
     std::vector<std::string> get_all_words();
+    void save_word_url(int word_id, const std::string& url, const std::string& html_content);
+    int get_word_id(const std::string& word);
 private:
     pqxx::connection conn;
     void check_column_exists(pqxx::work& txn, const std::string& table, const std::string& column);

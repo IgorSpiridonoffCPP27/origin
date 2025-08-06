@@ -50,7 +50,7 @@ std::wstring utf8_to_wstring(const std::string& str) {
     return wstr;
 }
 
-void process_word(const std::string& word) {
+void process_word(DBuse& db, const std::string& word) {
     std::cout << "\nПоиск по слову: " << word << std::endl;
     
     std::vector<std::string> test_urls = {
@@ -60,6 +60,12 @@ void process_word(const std::string& word) {
     };
 
     bool found = false;
+    int word_id = db.get_word_id(word);
+    if (word_id == -1) {
+        std::cerr << "Слово не найдено в базе данных" << std::endl;
+        return;
+    }
+
     for (const auto& url : test_urls) {
         std::cout << "Пробуем URL: " << url << std::endl;
         DownloadResult result = follow_redirects(url);
@@ -67,6 +73,10 @@ void process_word(const std::string& word) {
         if (!result.html.empty()) {
             std::cout << "Успешно скачано с конечного URL: " << result.final_url << std::endl;
             
+            // Сохраняем URL в базу данных
+            db.save_word_url(word_id, result.final_url, result.html);
+            
+            // Сохраняем также в файл (опционально)
             std::wstring wide_filename = utf8_to_wstring(word) + L"_page.html";
             std::ofstream out(wide_filename, std::ios::binary);
             out << result.html;
@@ -94,7 +104,7 @@ void monitor_new_words(DBuse& db) {
                 std::lock_guard<std::mutex> lock(data_mutex);
                 for (const auto& [word_id, word] : new_words) {
                     if (processed_word_ids.insert(word_id).second) {
-                        process_word(word);
+                        process_word(db, word);
                     }
                 }
                 last_processed_id = db.get_max_word_id();
@@ -198,7 +208,7 @@ int main() {
     
     try {
         DBuse db("localhost", "HTTP", "test_postgres", "12345678");
-        
+        db.create_tables();
         // Обрабатываем существующие слова
         auto initial_words = db.get_all_words();
         {
@@ -207,7 +217,7 @@ int main() {
             processed_word_ids.insert(max_id);
             
             for (const auto& word : initial_words) {
-                process_word(word);
+                process_word(db, word);
             }
         }
         

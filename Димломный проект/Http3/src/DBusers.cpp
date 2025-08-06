@@ -195,9 +195,44 @@ void DBuse::create_tables() {
             "id SERIAL PRIMARY KEY, "
             "word VARCHAR(100) NOT NULL UNIQUE)"
         );
-        std::cout << "Таблица words успешно создана\n";
+        txn.exec(
+            "CREATE TABLE IF NOT EXISTS word_urls("
+            "id SERIAL PRIMARY KEY, "
+            "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
+            "url VARCHAR(500) NOT NULL, "
+            "html_content TEXT, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        );
+
+        std::cout << "Таблица words и word_urls успешно создана\n";
     });
 }
+
+
+void DBuse::save_word_url(int word_id, const std::string& url, const std::string& html_content) {
+    execute_in_transaction([&](pqxx::work& txn) {
+        txn.exec_params(
+            "INSERT INTO word_urls (word_id, url, html_content) "
+            "VALUES ($1, $2, $3)",
+            word_id, url, html_content
+        );
+    });
+}
+
+int DBuse::get_word_id(const std::string& word) {
+    int word_id = -1;
+    execute_in_transaction([&](pqxx::work& txn) {
+        auto result = txn.exec_params(
+            "SELECT id FROM words WHERE word = $1", 
+            word
+        );
+        if (!result.empty()) {
+            word_id = result[0][0].as<int>();
+        }
+    });
+    return word_id;
+}
+
 
 void DBuse::add_unique_constraint() {
     // Теперь UNIQUE constraint добавляется сразу при создании таблицы
