@@ -90,6 +90,9 @@
         "xtree": "cpp",
         "xutility": "cpp",
         "filesystem": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "cinttypes": "cpp",
+        "regex": "cpp",
+        "unordered_set": "cpp"
     }
 }

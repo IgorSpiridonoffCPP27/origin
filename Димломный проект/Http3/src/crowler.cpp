@@ -20,14 +20,26 @@
 #include <thread>
 #include <chrono>
 #include <set>
+#include <unordered_set>
 #include <boost/regex.hpp> // Добавляем в начале файла
-
+#include <boost/algorithm/string.hpp>
 #pragma comment(lib, "shell32.lib")
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
 namespace ssl = net::ssl;
+
+// Добавляем глобальный контейнер для хранения посещенных URL
+std::mutex visited_urls_mutex;
+std::unordered_set<std::string> visited_urls;
+
+// Новая структура для хранения статистики по словам
+struct WordStats
+{
+    std::string word;
+    int count;
+};
 
 // Структура для хранения результата
 struct DownloadResult
@@ -38,7 +50,7 @@ struct DownloadResult
 
 // Прототип функции
 DownloadResult follow_redirects(const std::string &initial_url, int max_redirects = 5);
-
+std::string normalize_string(const std::string &str);
 // Глобальные переменные для управления потоками
 std::atomic<bool> keep_running(true);
 std::mutex data_mutex;
@@ -66,6 +78,94 @@ std::string prepare_wiki_url(const std::string &word)
         }
     }
     return result;
+}
+
+// Функция для подсчета вхождений слов
+std::vector<WordStats> count_word_occurrences(const std::string &content, const std::string &search_words)
+{
+    std::vector<WordStats> stats;
+    std::string normalized_content = normalize_string(content);
+    std::string normalized_words = normalize_string(search_words);
+
+    std::istringstream iss(normalized_words);
+    std::vector<std::string> words_to_count((std::istream_iterator<std::string>(iss)),
+                                            std::istream_iterator<std::string>());
+
+    for (const auto &word : words_to_count)
+    {
+        int count = 0;
+        size_t pos = 0;
+        while ((pos = normalized_content.find(word, pos)) != std::string::npos)
+        {
+            count++;
+            pos += word.length();
+        }
+        stats.push_back({word, count});
+    }
+
+    return stats;
+}
+
+// Модифицированная функция для сохранения ссылок с подсчетом слов
+void save_links_with_counts(DBuse &db,
+                            const std::string &word,
+                            const std::string &site_name,
+                            const std::string &base_url,
+                            const std::string &base_html,
+                            const std::vector<std::pair<std::string, std::string>> &links_content,
+                            int current_depth)
+{
+    // Получаем строку из базы данных
+    std::string db_string = db.get_full_word_string(word);
+    if (db_string.empty())
+    {
+        db_string = word;
+    }
+
+    // Создаем имя файла
+    std::wstring filename = utf8_to_wstring(word) + L"_" +
+                            utf8_to_wstring(site_name) +
+                            (current_depth > 0 ? L"_level" + std::to_wstring(current_depth) : L"") +
+                            L"_links.txt";
+
+    // Открываем файл для записи
+    std::ofstream out(filename);
+    out << "Базовая страница: " << base_url << "\n\n";
+
+    // Подсчет для базовой страницы
+    auto base_stats = count_word_occurrences(base_html, db_string);
+    out << "Статистика для базовой страницы:\n";
+    int base_total = 0;
+    for (const auto &ws : base_stats)
+    {
+        out << "  " << ws.word << ": " << ws.count << "\n";
+        base_total += ws.count;
+    }
+    out << "  Всего: " << base_total << "\n\n";
+
+    out << "Найдено " << links_content.size() << " релевантных страниц:\n\n";
+
+    // Обрабатываем каждую страницу
+    for (const auto &[url, html] : links_content)
+    {
+        // Подсчитываем вхождения слов
+        auto stats = count_word_occurrences(html, db_string);
+
+        // Записываем URL и статистику
+        out << "URL: " << url << "\n";
+        out << "Количество вхождений:\n";
+
+        int total = 0;
+        for (const auto &ws : stats)
+        {
+            out << "  " << ws.word << ": " << ws.count << "\n";
+            total += ws.count;
+        }
+
+        out << "  Всего: " << total << "\n\n";
+    }
+
+    std::wcout << L"Файл со статистикой сохранен: " << filename << std::endl;
 }
 
 std::vector<std::string> extract_links_from_html(const std::string &html_content, const std::string &base_url)
@@ -133,33 +233,52 @@ std::vector<std::string> extract_links_from_html(const std::string &html_content
 // Функция для нормализации строки (приведение к нижнему регистру, удаление лишних пробелов)
 std::string normalize_string(const std::string &str)
 {
-    std::string result;
-    result.reserve(str.size());
+    // 1. Извлекаем содержимое между тегами <body> и </body>
+    static const boost::regex body_regex("<body[^>]*>(.*?)</body>", boost::regex::icase);
+    boost::smatch matches;
+    std::string body_content;
 
-    bool last_was_space = false;
-    for (unsigned char c : str)
-    { // Используем unsigned char
-        if (std::isspace(static_cast<unsigned char>(c)))
-        {
-            if (!last_was_space && !result.empty())
-            {
-                result += ' ';
-                last_was_space = true;
-            }
-        }
-        else
-        {
-            result += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            last_was_space = false;
-        }
-    }
-
-    if (!result.empty() && result.back() == ' ')
+    if (boost::regex_search(str, matches, body_regex))
     {
-        result.pop_back();
+        body_content = matches[1].str();
+    }
+    else
+    {
+        // Если теги body не найдены, работаем со всем содержимым
+        body_content = str;
     }
 
-    return result;
+    // 2. Удаляем все HTML-теги
+    static const boost::regex html_tags("<[^>]*>");
+    std::string text = boost::regex_replace(body_content, html_tags, " ");
+
+    // 3. Заменяем HTML-сущности на соответствующие символы
+    static const std::vector<std::pair<boost::regex, std::string>> html_entities = {
+        {boost::regex("&nbsp;"), " "},
+        {boost::regex("&amp;"), "&"},
+        {boost::regex("&lt;"), "<"},
+        {boost::regex("&gt;"), ">"}};
+
+    for (const auto &[regex, replacement] : html_entities)
+    {
+        text = boost::regex_replace(text, regex, replacement);
+    }
+
+    // 4. Удаляем множественные пробелы
+    static const boost::regex multiple_spaces("\\s+");
+    text = boost::regex_replace(text, multiple_spaces, " ");
+
+    // 5. Приводим к нижнему регистру и обрезаем пробелы
+    boost::algorithm::to_lower(text);
+    boost::algorithm::trim(text);
+    // Удаляем содержимое <script> тегов
+    static const boost::regex script_regex("<script[^>]*>.*?</script>", boost::regex::icase);
+    text = boost::regex_replace(text, script_regex, " ");
+
+    // Удаляем содержимое <style> тегов
+    static const boost::regex style_regex("<style[^>]*>.*?</style>", boost::regex::icase);
+    text = boost::regex_replace(text, style_regex, " ");
+    return text;
 }
 
 // Функция проверки содержимого страницы на соответствие словам из базы
@@ -185,122 +304,131 @@ bool check_content(const std::string &content, const std::string &db_string)
 
     return false;
 }
-
+// Модифицированная рекурсивная функция с улучшенным логированием
 void save_links_recursive(DBuse &db, const std::string &word, const std::string &site_name,
                           const std::string &url, const std::string &html_content,
-                          int recursion_depth, int current_depth = 0)
+                          int recursion_depth, int current_depth = 0,
+                          const std::string &parent_path = "")
 {
-    // Извлекаем все ссылки из HTML
-    std::vector<std::string> all_links = extract_links_from_html(html_content, url);
-    std::vector<std::string> valid_links;
+    // Формируем путь для логирования
+    std::string current_path = parent_path.empty() ? "1" : parent_path + "." + std::to_string(current_depth);
+    std::cout << "Проверяю " << current_path << " URL: " << url << std::endl;
 
-    // Получаем полную строку из базы данных для этого слова
+    // Получаем строку из базы данных
     std::string db_string = db.get_full_word_string(word);
     if (db_string.empty())
     {
-        db_string = word; // fallback, если не нашли в базе
-    }
-    // Проверка на валидность UTF-8
-    try
-    {
-        std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-        conv.from_bytes(db_string);
-    }
-    catch (...)
-    {
-        std::cerr << "Invalid UTF-8 sequence in word: " << word << std::endl;
-        db_string = word; // fallback
+        db_string = word;
     }
 
-    // Фильтруем ссылки
-    for (const auto &link : all_links)
+    // Извлекаем все ссылки из HTML
+    auto all_links = extract_links_from_html(html_content, url);
+    std::cout << "Total links found: " << all_links.size() << std::endl;
+    std::vector<std::pair<std::string, std::string>> valid_links;
+
+    // Проверяем каждую ссылку с нумерацией
+    for (size_t i = 0; i < all_links.size(); ++i)
     {
-        // Пропускаем внешние и якорные ссылки
+        const auto &link = all_links[i];
+        std::string link_path = current_path + "." + std::to_string(i + 1);
+
+        // Пропускаем внешние ссылки и якоря
         if (link.find(url.substr(0, url.find("://") + 3)) == std::string::npos ||
             link.find('#') != std::string::npos)
         {
+            std::cout << "  " << link_path << " Пропускаем внешнюю/якорную ссылку: " << link << std::endl;
             continue;
         }
 
         try
         {
-            std::cout << "Проверяем ссылку: " << link << std::endl;
+            std::cout << "  " << link_path << " Проверяю ссылку: " << link << std::endl;
+            
+            // Проверяем, не посещали ли мы уже этот URL
+            {
+                std::lock_guard<std::mutex> lock(visited_urls_mutex);
+                if (visited_urls.count(link))
+                {
+                    std::cout << "  " << link_path << " URL уже проверялся, пропускаем: " << link << std::endl;
+                    continue;
+                }
+            }
+
             DownloadResult nested_result = follow_redirects(link);
 
             if (!nested_result.html.empty())
             {
-                // Гибкая проверка содержимого
+                // Проверяем наличие хотя бы одного слова
                 if (check_content(nested_result.html, db_string))
                 {
-                    valid_links.push_back(link);
-                    std::cout << "  ✓ Подходящая страница (найдено совпадение)" << std::endl;
+                    // Помечаем URL как посещенный только если он содержит искомые слова
+                    {
+                        std::lock_guard<std::mutex> lock(visited_urls_mutex);
+                        visited_urls.insert(nested_result.final_url);
+                    }
+                    
+                    valid_links.emplace_back(nested_result.final_url, nested_result.html);
+                    std::cout << "    " << link_path << " ✓ Найдены совпадения\n";
+
+                    // Выводим статистику в консоль
+                    auto stats = count_word_occurrences(nested_result.html, db_string);
+                    std::cout << "    " << link_path << " Статистика вхождений:\n";
+                    for (const auto &ws : stats)
+                    {
+                        std::cout << "      " << ws.word << ": " << ws.count << "\n";
+                    }
                 }
                 else
                 {
-                    std::cout << "  ✗ Не содержит нужных слов" << std::endl;
+                    std::cout << "    " << link_path << " ✗ Не содержит нужных слов\n";
                 }
             }
         }
         catch (const std::exception &e)
         {
-            std::cerr << "Ошибка при проверке ссылки: " << e.what() << std::endl;
+            std::cerr << "  " << link_path << " Ошибка при проверке ссылки: " << e.what() << std::endl;
         }
     }
 
-    // Сохраняем только валидные ссылки
+    // Сохраняем результаты
     if (!valid_links.empty())
     {
-        std::wstring links_filename = utf8_to_wstring(word) + L"_" +
-                                      utf8_to_wstring(site_name) +
-                                      (current_depth > 0 ? L"_level" + std::to_wstring(current_depth) : L"") +
-                                      L"_links.txt";
-
-        std::ofstream links_out(links_filename);
-        links_out << "URL источника: " << url << "\n";
-        links_out << "Искомые слова: " << db_string << "\n";
-        links_out << "Глубина: " << current_depth << "\n";
-        links_out << "Найдено ссылок: " << valid_links.size() << "\n\n";
-
-        for (const auto &link : valid_links)
-        {
-            links_out << link << "\n";
-        }
-
-        std::wcout << L"Сохранено " << valid_links.size() << L" валидных ссылок в: " << links_filename << std::endl;
+        save_links_with_counts(db, word, site_name, url, html_content, valid_links, current_depth);
     }
 
-    // Рекурсивная обработка с ограничением
+    // Рекурсивная обработка
     if (current_depth < recursion_depth && !valid_links.empty())
     {
-        const size_t max_links_to_follow = 5;
-        size_t processed = 0;
+        std::cout << "Current depth: " << current_depth << ", Recursion depth: " << recursion_depth
+                  << ", Valid links: " << valid_links.size() << std::endl;
 
-        for (const auto &link : valid_links)
+        for (const auto &[link, html] : valid_links)
         {
-            if (processed++ >= max_links_to_follow)
-                break;
-
             try
             {
-                DownloadResult nested_result = follow_redirects(link);
-                if (!nested_result.html.empty())
-                {
-                    save_links_recursive(db, word, site_name, nested_result.final_url,
-                                         nested_result.html, recursion_depth,
-                                         current_depth + 1);
-                }
+                std::cout << "Entering recursion with depth " << (current_depth + 1)
+                          << " for URL: " << link << std::endl;
+                save_links_recursive(db, word, site_name, link, html,
+                                   recursion_depth, current_depth + 1, current_path);
             }
             catch (const std::exception &e)
             {
-                std::cerr << "Ошибка рекурсивной обработки: " << e.what() << std::endl;
+                std::cerr << "  Ошибка рекурсивной обработки: " << e.what() << std::endl;
             }
         }
     }
 }
 
-void process_word(DBuse &db, const std::string &word, int recursion_depth = 1)
+// Модифицированная функция process_word
+void process_word(DBuse &db, const std::string &word, int recursion_depth = 2)
 {
     std::cout << "\nПоиск по слову: " << word << std::endl;
+    std::cout << "Recursion depth: " << recursion_depth << std::endl;
+    // Очищаем список посещенных URL для нового слова
+    {
+        std::lock_guard<std::mutex> lock(visited_urls_mutex);
+        visited_urls.clear();
+    }
 
     int word_id = db.get_word_id(word);
     if (word_id == -1)
@@ -309,12 +437,9 @@ void process_word(DBuse &db, const std::string &word, int recursion_depth = 1)
         return;
     }
 
-    // Список URL для попыток (в порядке приоритета)
     std::vector<std::pair<std::string, std::string>> url_templates = {
         {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
         {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
-
-    bool found = false;
 
     for (const auto &[site_name, url] : url_templates)
     {
@@ -323,48 +448,45 @@ void process_word(DBuse &db, const std::string &word, int recursion_depth = 1)
         {
             DownloadResult result = follow_redirects(url);
 
-            if (!result.html.empty() && result.html.find("400 Bad request") == std::string::npos)
+            if (!result.html.empty())
             {
-                std::cout << "Успешно скачано с " << site_name
-                          << " (" << result.final_url << ")" << std::endl;
+                std::cout << "1. Успешно загружена основная страница (" << result.final_url << ")" << std::endl;
 
-                if (db.save_word_url(word_id, result.final_url, result.html))
+                // Сохраняем HTML
+                std::wstring html_filename = utf8_to_wstring(word) + L"_" + utf8_to_wstring(site_name) + L".html";
+                std::ofstream html_out(html_filename, std::ios::binary);
+                html_out << result.html;
+
+                // Выводим статистику для основной страницы
+                std::string db_string = db.get_full_word_string(word);
+                if (db_string.empty())
+                    db_string = word;
+
+                auto stats = count_word_occurrences(result.html, db_string);
+                std::cout << "1. Статистика для основной страницы:\n";
+                for (const auto &ws : stats)
                 {
-                    std::cout << "URL сохранен в базу данных" << std::endl;
-
-                    // Сохраняем HTML в файл
-                    std::wstring wide_filename = utf8_to_wstring(word) + L"_" + utf8_to_wstring(site_name) + L".html";
-                    std::ofstream out(wide_filename, std::ios::binary);
-                    out << result.html;
-                    std::cout << "HTML сохранен в файл: " << word << "_" << site_name << ".html" << std::endl;
-                }
-                else
-                {
-                    std::cout << "URL уже существует в базе данных" << std::endl;
+                    std::cout << "  " << ws.word << ": " << ws.count << "\n";
                 }
 
-                ////////////////////////////////////////
-                // Используем рекурсивную функцию для сохранения ссылок
+                // Сохраняем в базу
+                db.save_word_url(word_id, result.final_url, result.html);
+
+                // Обрабатываем ссылки рекурсивно
                 save_links_recursive(db, word, site_name, result.final_url,
-                                     result.html, recursion_depth, 1);
-
-                ////////////////////////////////////////
-
-                found = true;
-                break;
+                                     result.html, recursion_depth);
+                return;
             }
         }
         catch (const std::exception &e)
         {
-            std::cerr << "Ошибка при запросе к " << site_name << ": " << e.what() << std::endl;
+            std::cerr << "Ошибка при обработке " << site_name << ": " << e.what() << std::endl;
         }
     }
 
-    if (!found)
-    {
-        std::cerr << "Не удалось получить результаты для слова: " << word << std::endl;
-    }
+    std::cerr << "Не удалось обработать слово: " << word << std::endl;
 }
+
 void monitor_new_words(DBuse &db)
 {
     int last_processed_id = db.get_max_word_id();
