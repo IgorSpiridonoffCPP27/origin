@@ -47,138 +47,74 @@ std::string generate_html() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Database Client</title>
+    <title>Word Search</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
-        button { padding: 8px 16px; background: #4CAF50; color: white; border: none; cursor: pointer; }
-        button:hover { background: #45a049; }
-        table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; }
-        input { padding: 8px; width: 100%; box-sizing: border-box; }
-        .error { color: red; background: #ffeeee; padding: 10px; border-radius: 4px; }
-        .success { color: green; background: #eeffee; padding: 10px; border-radius: 4px; }
-        .existing-record { margin-top: 15px; padding: 10px; background: #f5f5f5; border-radius: 4px; }
+        #search-form { margin: 20px 0; }
+        #search-input { padding: 8px; width: 300px; }
+        #search-button { padding: 8px 16px; }
+        #result { margin-top: 20px; }
+        .url-item { margin: 10px 0; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .url { font-weight: bold; color: #06c; }
+        .count { color: #666; }
+        .pending { color: #ff9900; }
     </style>
 </head>
 <body>
-    <h1>Работа с базой данных</h1>
+    <h1>Поиск слова в базе</h1>
     
-    <div>
-        <button onclick="loadTables()">Показать таблицы</button>
-        <div id="tables"></div>
+    <div id="search-form">
+        <input type="text" id="search-input" placeholder="Введите слово...">
+        <button id="search-button">Найти</button>
     </div>
     
-    <div id="form-container" style="margin-top: 30px;"></div>
     <div id="result"></div>
 
     <script>
-        async function loadTables() {
-            try {
-                const response = await fetch('/api/tables');
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Ошибка загрузки таблиц');
-                }
-                const tables = await response.json();
-                
-                let html = '<h2>Доступные таблицы:</h2><table><tr><th>Название</th><th>Действие</th></tr>';
-                tables.forEach(table => {
-                    html += `<tr><td>${table}</td><td><button onclick="showTableForm('${table}')">Добавить данные</button></td></tr>`;
-                });
-                html += '</table>';
-                document.getElementById('tables').innerHTML = html;
-            } catch (error) {
-                document.getElementById('tables').innerHTML = `<p class="error">Ошибка: ${error.message}</p>`;
-            }
-        }
-
-        async function showTableForm(table) {
-            try {
-                const response = await fetch('/api/schema?table=' + table);
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Ошибка загрузки схемы таблицы');
-                }
-                const columns = await response.json();
-                
-                let form = `<h2>Добавление в ${table}</h2><form onsubmit="submitForm(event, '${table}')">`;
-                columns.forEach(col => {
-                    if (col.name !== "id") { // Исключаем поле id
-                        form += `<div class="form-group"><label>${col.name} (${col.type}):</label><input type="text" name="${col.name}" required></div>`;
-                    }
-                });
-                form += `
-                    <div class="form-group"><label>Логин:</label><input type="text" name="username" required></div>
-                    <div class="form-group"><label>Пароль:</label><input type="password" name="password" required></div>
-                    <button type="submit">Отправить</button>
-                    </form>
-                `;
-                document.getElementById('form-container').innerHTML = form;
-            } catch (error) {
-                document.getElementById('form-container').innerHTML = `<p class="error">Ошибка: ${error.message}</p>`;
-            }
-        }
-
-        async function submitForm(e, table) {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            const data = {};
-            const auth = {};
+        document.getElementById('search-button').addEventListener('click', async () => {
+            const word = document.getElementById('search-input').value.trim();
+            if (!word) return;
             
-            formData.forEach((value, key) => {
-                if (key === 'username' || key === 'password') {
-                    auth[key] = value;
-                } else {
-                    data[key] = value;
-                }
-            });
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Ищем...</p>';
             
             try {
-                // Авторизация
-                const authResponse = await fetch('/api/login', {
+                const response = await fetch('/api/word_request', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(auth)
+                    body: JSON.stringify({ word })
                 });
                 
-                if (!authResponse.ok) {
-                    const error = await authResponse.json();
-                    throw new Error(error.error || 'Ошибка авторизации');
-                }
+                const data = await response.json();
                 
-                // Отправка данных
-                const writeResponse = await fetch('/api/write?table=' + table, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ values: data })
-                });
-                
-                const result = await writeResponse.json();
-                
-                if (!writeResponse.ok) {
-                    if (result.existing_record) {
-                        let html = `<div class="error">${result.message || result.error}</div><div class="existing-record"><h3>Существующая запись:</h3><table>`;
-                        for (const [key, value] of Object.entries(result.existing_record)) {
-                            if (key !== "id") { // Исключаем поле id
-                                html += `<tr><td><strong>${key}</strong></td><td>${value !== null ? value : 'NULL'}</td></tr>`;
-                            }
-                        }
-                        html += '</table></div>';
-                        document.getElementById('result').innerHTML = html;
+                if (data.status === 'found') {
+                    let html = `<h3>Результаты для "${word}":</h3>`;
+                    if (data.urls && data.urls.length > 0) {
+                        data.urls.forEach(item => {
+                            html += `
+                                <div class="url-item">
+                                    <div class="url">${item.url}</div>
+                                    <div class="count">Найдено ${item.count} раз</div>
+                                    <div class="content">${item.content.substring(0, 100)}...</div>
+                                </div>
+                            `;
+                        });
                     } else {
-                        throw new Error(result.message || result.error || 'Ошибка записи');
+                        html += `<p>Нет данных по этому слову</p>`;
                     }
-                } else {
-                    document.getElementById('result').innerHTML = `<div class="success">${result.message}</div>`;
-                    e.target.reset();
+                    resultDiv.innerHTML = html;
+                } else if (data.status === 'pending') {
+                    resultDiv.innerHTML = `
+                        <p class="pending">
+                            Слово "${word}" добавлено в очередь на обработку. 
+                            Пожалуйста, проверьте позже.
+                        </p>
+                    `;
                 }
             } catch (error) {
-                document.getElementById('result').innerHTML = `<div class="error">${error.message}</div>`;
+                resultDiv.innerHTML = `<p style="color: red;">Ошибка: ${error.message}</p>`;
             }
-        }
+        });
     </script>
 </body>
 </html>

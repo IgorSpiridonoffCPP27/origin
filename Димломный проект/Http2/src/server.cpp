@@ -53,6 +53,12 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
                     res.body() = nlohmann::json{{"error", "Неверные учетные данные"}}.dump();
                 }
             }
+            else if (req.target() == "/word_request") {
+                auto body = nlohmann::json::parse(req.body());
+                std::string word = body["word"].get<std::string>();
+                res.body() = db.process_word_request(word).dump();
+                res.result(http::status::ok);
+            }
             else if (req.target().starts_with("/write")) {
                 std::string table = get_query_param(req.target(), "table");
     nlohmann::json response;
