@@ -199,10 +199,8 @@ void DBuse::insert_data(const std::string &table,
     }
 }
 
-void DBuse::create_tables()
-{
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
+void DBuse::create_tables() {
+    execute_in_transaction([&](pqxx::work &txn) {
         txn.exec(
             "CREATE TABLE IF NOT EXISTS words("
             "id SERIAL PRIMARY KEY, "
@@ -214,18 +212,17 @@ void DBuse::create_tables()
             "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
             "url VARCHAR(500) NOT NULL, "
             "html_content TEXT, "
+            "word_count INTEGER DEFAULT 0, "  // Добавляем поле для хранения количества вхождений
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-            "UNIQUE(word_id, url))"  // Добавляем уникальный constraint
+            "UNIQUE(word_id, url))"
         );
-
-        std::cout << "Таблица words и word_urls успешно создана\n"; });
+        std::cout << "Таблицы успешно созданы\n";
+    });
 }
 
-bool DBuse::save_word_url(int word_id, const std::string &url, const std::string &html_content)
-{
+bool DBuse::save_word_url(int word_id, const std::string &url, const std::string &html_content, int word_count) {
     bool saved = false;
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
+    execute_in_transaction([&](pqxx::work &txn) {
         // Проверяем, существует ли уже такой URL для этого слова
         auto exists = txn.exec_params(
             "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
@@ -234,12 +231,13 @@ bool DBuse::save_word_url(int word_id, const std::string &url, const std::string
         
         if (exists.empty()) {
             txn.exec_params(
-                "INSERT INTO word_urls (word_id, url, html_content) "
-                "VALUES ($1, $2, $3)",
-                word_id, url, html_content
+                "INSERT INTO word_urls (word_id, url, html_content, word_count) "
+                "VALUES ($1, $2, $3, $4)",
+                word_id, url, html_content, word_count
             );
             saved = true;
-        } });
+        }
+    });
     return saved;
 }
 

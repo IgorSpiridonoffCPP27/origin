@@ -37,7 +37,7 @@ public:
     std::vector<std::string> get_all_words();
     int get_word_id(const std::string& word);
     bool url_exists_for_word(int word_id, const std::string& url);
-    bool save_word_url(int word_id, const std::string& url, const std::string& html_content);
+    bool save_word_url(int word_id, const std::string &url, const std::string &html_content, int word_count);
     std::string get_full_word_string(const std::string &word);
 private:
     pqxx::connection conn;

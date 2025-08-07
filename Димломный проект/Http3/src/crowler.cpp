@@ -169,66 +169,53 @@ std::vector<WordStats> count_word_occurrences(const std::string &content, const 
     return stats;
 }
 
-// Модифицированная функция для сохранения ссылок с подсчетом слов
+// Модифицированная функция для сохранения статистики в базу данных
 void save_links_with_counts(DBuse &db,
-                            const std::string &word,
-                            const std::string &site_name,
-                            const std::string &base_url,
-                            const std::string &base_html,
-                            const std::vector<std::pair<std::string, std::string>> &links_content,
-                            int current_depth)
+                           const std::string &word,
+                           const std::string &site_name,
+                           const std::string &base_url,
+                           const std::string &base_html,
+                           const std::vector<std::pair<std::string, std::string>> &links_content,
+                           int current_depth)
 {
     // Получаем строку из базы данных
     std::string db_string = db.get_full_word_string(word);
-    if (db_string.empty())
-    {
+    if (db_string.empty()) {
         db_string = word;
     }
 
-    // Создаем имя файла
-    std::wstring filename = utf8_to_wstring(word) + L"_" +
-                            utf8_to_wstring(site_name) +
-                            (current_depth > 0 ? L"_level" + std::to_wstring(current_depth) : L"") +
-                            L"_links.txt";
+    // Получаем ID слова
+    int word_id = db.get_word_id(word);
+    if (word_id == -1) {
+        std::cerr << "Слово не найдено в базе данных" << std::endl;
+        return;
+    }
 
-    // Открываем файл для записи
-    std::ofstream out(filename);
-    out << "Базовая страница: " << base_url << "\n\n";
-
-    // Подсчет для базовой страницы
+    // Сохраняем базовую страницу с подсчетом статистики
     auto base_stats = count_word_occurrences(base_html, db_string);
-    out << "Статистика для базовой страницы:\n";
     int base_total = 0;
-    for (const auto &ws : base_stats)
-    {
-        out << "  " << ws.word << ": " << ws.count << "\n";
+    for (const auto &ws : base_stats) {
         base_total += ws.count;
     }
-    out << "  Всего: " << base_total << "\n\n";
+    
+    // Сохраняем базовый URL в базу данных
+    db.save_word_url(word_id, base_url, base_html, base_total);
 
-    out << "Найдено " << links_content.size() << " релевантных страниц:\n\n";
-
-    // Обрабатываем каждую страницу
-    for (const auto &[url, html] : links_content)
-    {
+    // Обрабатываем каждую релевантную страницу
+    for (const auto &[url, html] : links_content) {
         // Подсчитываем вхождения слов
         auto stats = count_word_occurrences(html, db_string);
-
-        // Записываем URL и статистику
-        out << "URL: " << url << "\n";
-        out << "Количество вхождений:\n";
-
         int total = 0;
-        for (const auto &ws : stats)
-        {
-            out << "  " << ws.word << ": " << ws.count << "\n";
+        for (const auto &ws : stats) {
             total += ws.count;
         }
-
-        out << "  Всего: " << total << "\n\n";
+        
+        // Сохраняем URL в базу данных с подсчитанной статистикой
+        db.save_word_url(word_id, url, html, total);
     }
 
-    std::wcout << L"Файл со статистикой сохранен: " << filename << std::endl;
+    std::wcout << L"Статистика сохранена в базу данных для слова: " 
+              << utf8_to_wstring(word) << std::endl;
 }
 
 std::vector<std::string> extract_links_from_html(const std::string &html_content, const std::string &base_url)
