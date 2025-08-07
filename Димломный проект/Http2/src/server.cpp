@@ -19,80 +19,76 @@ std::string get_query_param(const std::string& target, const std::string& param)
     return target.substr(param_pos, end_pos - param_pos);
 }
 
+// В handle_request добавим обработку новых запросов
 void handle_request(DBuse& db, http::request<http::string_body>& req, http::response<http::string_body>& res) {
     res.set(http::field::content_type, "application/json; charset=utf-8");
     
     try {
-        if (req.method() == http::verb::get) {
-            if (req.target() == "/tables") {
-                res.body() = db.get_tables().dump();
-                res.result(http::status::ok);
-            } 
-            else if (req.target().starts_with("/schema")) {
-                std::string table = get_query_param(req.target(), "table");
-                res.body() = db.get_columns(table).dump();
-                res.result(http::status::ok);
-            }
-            else if (req.target().starts_with("/get_record")) {
-                std::string table = get_query_param(req.target(), "table");
-                std::string column = get_query_param(req.target(), "column");
-                std::string value = get_query_param(req.target(), "value");
-                res.body() = db.get_record(table, column, value).dump();
-                res.result(http::status::ok);
-            }
-        }
-        else if (req.method() == http::verb::post) {
-            auto body = nlohmann::json::parse(req.body());
-            
-            if (req.target() == "/login") {
-                if (db.check_auth(body["username"].get<std::string>(), body["password"].get<std::string>())) {
-                    res.body() = nlohmann::json{{"access", "granted"}}.dump();
-                    res.result(http::status::ok);
-                } else {
-                    res.result(http::status::unauthorized);
-                    res.body() = nlohmann::json{{"error", "Неверные учетные данные"}}.dump();
-                }
-            }
-            else if (req.target() == "/word_request") {
+        if (req.method() == http::verb::post) {
+            if (req.target() == "/word_request") {
                 auto body = nlohmann::json::parse(req.body());
                 std::string word = body["word"].get<std::string>();
-                res.body() = db.process_word_request(word).dump();
+                
+                // Получаем данные из базы
+                auto result = db.process_word_request(word);
+                
+                // Форматируем ответ для нового интерфейса
+                if (result["status"] == "completed" && result.contains("urls")) {
+                    nlohmann::json formatted;
+                    formatted["status"] = "completed";
+                    formatted["urls"] = nlohmann::json::array();
+                    
+                    for (auto& item : result["urls"]) {
+                        formatted["urls"].push_back({
+                            {"url", item["url"]},
+                            {"count", item["count"]},
+                            {"content", item["content"]}
+                        });
+                    }
+                    
+                    res.body() = formatted.dump();
+                } else {
+                    res.body() = result.dump();
+                }
+                
                 res.result(http::status::ok);
             }
             else if (req.target() == "/check_status") {
                 auto body = nlohmann::json::parse(req.body());
                 int word_id = body["word_id"].get<int>();
-                res.body() = db.check_word_status(word_id).dump();
+                
+                auto result = db.check_word_status(word_id);
+                
+                // Форматируем ответ для нового интерфейса
+                if (result["status"] == "completed" && result.contains("urls")) {
+                    nlohmann::json formatted;
+                    formatted["status"] = "completed";
+                    formatted["urls"] = nlohmann::json::array();
+                    
+                    for (auto& item : result["urls"]) {
+                        formatted["urls"].push_back({
+                            {"url", item["url"]},
+                            {"count", item["count"]},
+                            {"content", item["content"]}
+                        });
+                    }
+                    
+                    res.body() = formatted.dump();
+                } else {
+                    res.body() = result.dump();
+                }
+                
                 res.result(http::status::ok);
             }
-            else if (req.target().starts_with("/write")) {
-                std::string table = get_query_param(req.target(), "table");
-    nlohmann::json response;
-    try {
-        db.insert_data(table, body["values"], response);
-        
-        // Устанавливаем соответствующий HTTP статус из response["status"]
-        res.result(static_cast<http::status>(response["status"].get<int>()));
-        res.body() = response.dump();
-        
-        // Убедимся, что заголовки установлены правильно
-        res.set(http::field::content_type, "application/json; charset=utf-8");
-        res.prepare_payload();
-    } catch (const std::exception& e) {
-        res.result(http::status::internal_server_error);
-        res.body() = nlohmann::json{
-            {"status", 500},
-            {"message", "Internal server error"}
-        }.dump();
-    }
-}
         }
     } catch (const std::exception& e) {
         res.result(http::status::internal_server_error);
-        res.body() = nlohmann::json{{"error", e.what()}}.dump();
+        res.body() = nlohmann::json{
+            {"status", "error"},
+            {"message", e.what()}
+        }.dump();
     }
 }
-
 int main() {
     try {
         SetConsoleOutputCP(CP_UTF8);
