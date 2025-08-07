@@ -401,7 +401,11 @@ void save_links_recursive(DBuse &db, const std::string &word, const std::string 
     std::mutex valid_links_mutex;
     std::vector<std::future<void>> futures;
 
-    for (size_t i = 0; i < all_links.size(); ++i) {
+    // Ограничение на количество найденных ссылок (3 как в примере)
+    const int max_links_to_process = 3;
+    std::atomic<int> found_links_count(0);
+
+    for (size_t i = 0; i < all_links.size() && found_links_count < max_links_to_process; ++i) {
         const auto &link = all_links[i];
         std::string link_path = current_path + "." + std::to_string(i + 1);
 
@@ -434,7 +438,10 @@ void save_links_recursive(DBuse &db, const std::string &word, const std::string 
                         
                         {
                             std::lock_guard<std::mutex> lock(valid_links_mutex);
-                            valid_links.emplace_back(nested_result.final_url, nested_result.html);
+                            if (found_links_count < max_links_to_process) {
+                                valid_links.emplace_back(nested_result.final_url, nested_result.html);
+                                found_links_count++;
+                            }
                         }
                         
                         std::cout << "    " << link_path << " ✓ Найдены совпадения\n";
@@ -456,8 +463,10 @@ void save_links_recursive(DBuse &db, const std::string &word, const std::string 
     if (!valid_links.empty()) {
         save_links_with_counts(db, word, site_name, url, html_content, valid_links, current_depth);
         
+        // Если глубина рекурсии >=1, продолжаем поиск в найденных ссылках
         if (current_depth < recursion_depth) {
             for (const auto &[link, html] : valid_links) {
+                // Для вложенных ссылок ищем только те, что содержат искомое слово
                 save_links_recursive(db, word, site_name, link, html,
                                    recursion_depth, pool, current_depth + 1, current_path);
             }
