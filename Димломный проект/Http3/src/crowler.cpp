@@ -20,6 +20,10 @@
 #include <thread>
 #include <chrono>
 #include <set>
+#include <queue>
+#include <condition_variable>
+#include <future>
+#include <condition_variable>
 #include <unordered_set>
 #include <boost/regex.hpp> // Добавляем в начале файла
 #include <boost/algorithm/string.hpp>
@@ -33,6 +37,63 @@ namespace ssl = net::ssl;
 // Добавляем глобальный контейнер для хранения посещенных URL
 std::mutex visited_urls_mutex;
 std::unordered_set<std::string> visited_urls;
+
+// Модифицированный ThreadPool с поддержкой возвращаемых значений
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t threads) : stop(false) {
+        for(size_t i = 0; i < threads; ++i) {
+            workers.emplace_back([this] {
+                for(;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(queue_mutex);
+                        condition.wait(lock, [this]{ return stop || !tasks.empty(); });
+                        if(stop && tasks.empty()) return;
+                        task = std::move(tasks.front());
+                        tasks.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+
+    template<class F, class... Args>
+    auto enqueue(F&& f, Args&&... args) -> std::future<typename std::result_of<F(Args...)>::type> {
+        using return_type = typename std::result_of<F(Args...)>::type;
+        
+        auto task = std::make_shared<std::packaged_task<return_type()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+            
+        std::future<return_type> res = task->get_future();
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            if(stop) throw std::runtime_error("enqueue on stopped ThreadPool");
+            tasks.emplace([task](){ (*task)(); });
+        }
+        condition.notify_one();
+        return res;
+    }
+
+    ~ThreadPool() {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            stop = true;
+        }
+        condition.notify_all();
+        for(std::thread &worker: workers)
+            worker.join();
+    }
+
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex queue_mutex;
+    std::condition_variable condition;
+    bool stop;
+};
+
 
 // Новая структура для хранения статистики по словам
 struct WordStats
@@ -58,6 +119,8 @@ std::set<int> processed_word_ids;
 
 std::wstring utf8_to_wstring(const std::string &str)
 {
+    if (str.empty())
+        return L"";
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
     std::wstring wstr(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size_needed);
@@ -171,7 +234,8 @@ void save_links_with_counts(DBuse &db,
 std::vector<std::string> extract_links_from_html(const std::string &html_content, const std::string &base_url)
 {
     std::vector<std::string> links;
-
+    if (html_content.empty())
+        return links;
     try
     {
         // Регулярное выражение для поиска ссылок в HTML
@@ -227,58 +291,72 @@ std::vector<std::string> extract_links_from_html(const std::string &html_content
     {
         std::cerr << "Ошибка при парсинге HTML: " << e.what() << std::endl;
     }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error extracting links: " << e.what() << std::endl;
+    }
 
     return links;
 }
 // Функция для нормализации строки (приведение к нижнему регистру, удаление лишних пробелов)
 std::string normalize_string(const std::string &str)
 {
-    // 1. Извлекаем содержимое между тегами <body> и </body>
-    static const boost::regex body_regex("<body[^>]*>(.*?)</body>", boost::regex::icase);
-    boost::smatch matches;
-    std::string body_content;
-
-    if (boost::regex_search(str, matches, body_regex))
+    if (str.empty())
+        return "";
+    try
     {
-        body_content = matches[1].str();
+        // 1. Извлекаем содержимое между тегами <body> и </body>
+        static const boost::regex body_regex("<body[^>]*>(.*?)</body>", boost::regex::icase);
+        boost::smatch matches;
+        std::string body_content;
+
+        if (boost::regex_search(str, matches, body_regex))
+        {
+            body_content = matches[1].str();
+        }
+        else
+        {
+            // Если теги body не найдены, работаем со всем содержимым
+            body_content = str;
+        }
+
+        // 2. Удаляем все HTML-теги
+        static const boost::regex html_tags("<[^>]*>");
+        std::string text = boost::regex_replace(body_content, html_tags, " ");
+
+        // 3. Заменяем HTML-сущности на соответствующие символы
+        static const std::vector<std::pair<boost::regex, std::string>> html_entities = {
+            {boost::regex("&nbsp;"), " "},
+            {boost::regex("&amp;"), "&"},
+            {boost::regex("&lt;"), "<"},
+            {boost::regex("&gt;"), ">"}};
+
+        for (const auto &[regex, replacement] : html_entities)
+        {
+            text = boost::regex_replace(text, regex, replacement);
+        }
+
+        // 4. Удаляем множественные пробелы
+        static const boost::regex multiple_spaces("\\s+");
+        text = boost::regex_replace(text, multiple_spaces, " ");
+
+        // 5. Приводим к нижнему регистру и обрезаем пробелы
+        boost::algorithm::to_lower(text);
+        boost::algorithm::trim(text);
+        // Удаляем содержимое <script> тегов
+        static const boost::regex script_regex("<script[^>]*>.*?</script>", boost::regex::icase);
+        text = boost::regex_replace(text, script_regex, " ");
+
+        // Удаляем содержимое <style> тегов
+        static const boost::regex style_regex("<style[^>]*>.*?</style>", boost::regex::icase);
+        text = boost::regex_replace(text, style_regex, " ");
+        return text;
     }
-    else
+    catch (const std::exception &e)
     {
-        // Если теги body не найдены, работаем со всем содержимым
-        body_content = str;
+        std::cerr << "Error in normalize_string: " << e.what() << std::endl;
+        return "";
     }
-
-    // 2. Удаляем все HTML-теги
-    static const boost::regex html_tags("<[^>]*>");
-    std::string text = boost::regex_replace(body_content, html_tags, " ");
-
-    // 3. Заменяем HTML-сущности на соответствующие символы
-    static const std::vector<std::pair<boost::regex, std::string>> html_entities = {
-        {boost::regex("&nbsp;"), " "},
-        {boost::regex("&amp;"), "&"},
-        {boost::regex("&lt;"), "<"},
-        {boost::regex("&gt;"), ">"}};
-
-    for (const auto &[regex, replacement] : html_entities)
-    {
-        text = boost::regex_replace(text, regex, replacement);
-    }
-
-    // 4. Удаляем множественные пробелы
-    static const boost::regex multiple_spaces("\\s+");
-    text = boost::regex_replace(text, multiple_spaces, " ");
-
-    // 5. Приводим к нижнему регистру и обрезаем пробелы
-    boost::algorithm::to_lower(text);
-    boost::algorithm::trim(text);
-    // Удаляем содержимое <script> тегов
-    static const boost::regex script_regex("<script[^>]*>.*?</script>", boost::regex::icase);
-    text = boost::regex_replace(text, script_regex, " ");
-
-    // Удаляем содержимое <style> тегов
-    static const boost::regex style_regex("<style[^>]*>.*?</style>", boost::regex::icase);
-    text = boost::regex_replace(text, style_regex, " ");
-    return text;
 }
 
 // Функция проверки содержимого страницы на соответствие словам из базы
@@ -306,185 +384,121 @@ bool check_content(const std::string &content, const std::string &db_string)
 }
 // Модифицированная рекурсивная функция с улучшенным логированием
 void save_links_recursive(DBuse &db, const std::string &word, const std::string &site_name,
-                          const std::string &url, const std::string &html_content,
-                          int recursion_depth, int current_depth = 0,
-                          const std::string &parent_path = "")
-{
-    // Формируем путь для логирования
+                         const std::string &url, const std::string &html_content,
+                         int recursion_depth, ThreadPool& pool,
+                         int current_depth = 0, const std::string &parent_path = "") {
+    
     std::string current_path = parent_path.empty() ? "1" : parent_path + "." + std::to_string(current_depth);
     std::cout << "Проверяю " << current_path << " URL: " << url << std::endl;
 
-    // Получаем строку из базы данных
     std::string db_string = db.get_full_word_string(word);
-    if (db_string.empty())
-    {
-        db_string = word;
-    }
+    if (db_string.empty()) db_string = word;
 
-    // Извлекаем все ссылки из HTML
     auto all_links = extract_links_from_html(html_content, url);
     std::cout << "Total links found: " << all_links.size() << std::endl;
+    
     std::vector<std::pair<std::string, std::string>> valid_links;
+    std::mutex valid_links_mutex;
+    std::vector<std::future<void>> futures;
 
-    // Проверяем каждую ссылку с нумерацией
-    for (size_t i = 0; i < all_links.size(); ++i)
-    {
+    for (size_t i = 0; i < all_links.size(); ++i) {
         const auto &link = all_links[i];
         std::string link_path = current_path + "." + std::to_string(i + 1);
 
-        // Пропускаем внешние ссылки и якоря
         if (link.find(url.substr(0, url.find("://") + 3)) == std::string::npos ||
-            link.find('#') != std::string::npos)
-        {
+            link.find('#') != std::string::npos) {
             std::cout << "  " << link_path << " Пропускаем внешнюю/якорную ссылку: " << link << std::endl;
             continue;
         }
 
-        try
-        {
-            std::cout << "  " << link_path << " Проверяю ссылку: " << link << std::endl;
-            
-            // Проверяем, не посещали ли мы уже этот URL
-            {
-                std::lock_guard<std::mutex> lock(visited_urls_mutex);
-                if (visited_urls.count(link))
-                {
-                    std::cout << "  " << link_path << " URL уже проверялся, пропускаем: " << link << std::endl;
-                    continue;
-                }
-            }
-
-            DownloadResult nested_result = follow_redirects(link);
-
-            if (!nested_result.html.empty())
-            {
-                // Проверяем наличие хотя бы одного слова
-                if (check_content(nested_result.html, db_string))
-                {
-                    // Помечаем URL как посещенный только если он содержит искомые слова
+        futures.emplace_back(
+            pool.enqueue([&, link, link_path]() {
+                try {
+                    std::cout << "  " << link_path << " Проверяю ссылку: " << link << std::endl;
+                    
                     {
                         std::lock_guard<std::mutex> lock(visited_urls_mutex);
-                        visited_urls.insert(nested_result.final_url);
+                        if (visited_urls.count(link)) {
+                            std::cout << "  " << link_path << " URL уже проверялся, пропускаем: " << link << std::endl;
+                            return;
+                        }
                     }
-                    
-                    valid_links.emplace_back(nested_result.final_url, nested_result.html);
-                    std::cout << "    " << link_path << " ✓ Найдены совпадения\n";
 
-                    // Выводим статистику в консоль
-                    auto stats = count_word_occurrences(nested_result.html, db_string);
-                    std::cout << "    " << link_path << " Статистика вхождений:\n";
-                    for (const auto &ws : stats)
-                    {
-                        std::cout << "      " << ws.word << ": " << ws.count << "\n";
+                    DownloadResult nested_result = follow_redirects(link);
+
+                    if (!nested_result.html.empty() && check_content(nested_result.html, db_string)) {
+                        {
+                            std::lock_guard<std::mutex> lock(visited_urls_mutex);
+                            visited_urls.insert(nested_result.final_url);
+                        }
+                        
+                        {
+                            std::lock_guard<std::mutex> lock(valid_links_mutex);
+                            valid_links.emplace_back(nested_result.final_url, nested_result.html);
+                        }
+                        
+                        std::cout << "    " << link_path << " ✓ Найдены совпадения\n";
+                    } else {
+                        std::cout << "    " << link_path << " ✗ Не содержит нужных слов\n";
                     }
+                } catch (const std::exception &e) {
+                    std::cerr << "  " << link_path << " Ошибка при проверке ссылки: " << e.what() << std::endl;
                 }
-                else
-                {
-                    std::cout << "    " << link_path << " ✗ Не содержит нужных слов\n";
-                }
-            }
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "  " << link_path << " Ошибка при проверке ссылки: " << e.what() << std::endl;
-        }
+            })
+        );
     }
 
-    // Сохраняем результаты
-    if (!valid_links.empty())
-    {
+    // Ждем завершения всех задач
+    for (auto &future : futures) {
+        future.wait();
+    }
+
+    if (!valid_links.empty()) {
         save_links_with_counts(db, word, site_name, url, html_content, valid_links, current_depth);
-    }
-
-    // Рекурсивная обработка
-    if (current_depth < recursion_depth && !valid_links.empty())
-    {
-        std::cout << "Current depth: " << current_depth << ", Recursion depth: " << recursion_depth
-                  << ", Valid links: " << valid_links.size() << std::endl;
-
-        for (const auto &[link, html] : valid_links)
-        {
-            try
-            {
-                std::cout << "Entering recursion with depth " << (current_depth + 1)
-                          << " for URL: " << link << std::endl;
+        
+        if (current_depth < recursion_depth) {
+            for (const auto &[link, html] : valid_links) {
                 save_links_recursive(db, word, site_name, link, html,
-                                   recursion_depth, current_depth + 1, current_path);
-            }
-            catch (const std::exception &e)
-            {
-                std::cerr << "  Ошибка рекурсивной обработки: " << e.what() << std::endl;
+                                   recursion_depth, pool, current_depth + 1, current_path);
             }
         }
     }
 }
 
 // Модифицированная функция process_word
-void process_word(DBuse &db, const std::string &word, int recursion_depth = 2)
-{
+void process_word(DBuse &db, const std::string &word, int recursion_depth = 2) {
     std::cout << "\nПоиск по слову: " << word << std::endl;
-    std::cout << "Recursion depth: " << recursion_depth << std::endl;
-    // Очищаем список посещенных URL для нового слова
+    
     {
         std::lock_guard<std::mutex> lock(visited_urls_mutex);
         visited_urls.clear();
     }
 
     int word_id = db.get_word_id(word);
-    if (word_id == -1)
-    {
+    if (word_id == -1) {
         std::cerr << "Слово не найдено в базе данных" << std::endl;
         return;
     }
+
+    ThreadPool pool(4); // Создаем пул из 4 потоков
 
     std::vector<std::pair<std::string, std::string>> url_templates = {
         {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
         {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
 
-    for (const auto &[site_name, url] : url_templates)
-    {
-        std::cout << "Пробуем " << site_name << " URL: " << url << std::endl;
-        try
-        {
+    for (const auto &[site_name, url] : url_templates) {
+        try {
             DownloadResult result = follow_redirects(url);
-
-            if (!result.html.empty())
-            {
-                std::cout << "1. Успешно загружена основная страница (" << result.final_url << ")" << std::endl;
-
-                // Сохраняем HTML
-                std::wstring html_filename = utf8_to_wstring(word) + L"_" + utf8_to_wstring(site_name) + L".html";
-                std::ofstream html_out(html_filename, std::ios::binary);
-                html_out << result.html;
-
-                // Выводим статистику для основной страницы
-                std::string db_string = db.get_full_word_string(word);
-                if (db_string.empty())
-                    db_string = word;
-
-                auto stats = count_word_occurrences(result.html, db_string);
-                std::cout << "1. Статистика для основной страницы:\n";
-                for (const auto &ws : stats)
-                {
-                    std::cout << "  " << ws.word << ": " << ws.count << "\n";
-                }
-
-                // Сохраняем в базу
-                db.save_word_url(word_id, result.final_url, result.html);
-
-                // Обрабатываем ссылки рекурсивно
+            if (!result.html.empty()) {
+                // Сохраняем HTML и обрабатываем ссылки
                 save_links_recursive(db, word, site_name, result.final_url,
-                                     result.html, recursion_depth);
+                                   result.html, recursion_depth, pool);
                 return;
             }
-        }
-        catch (const std::exception &e)
-        {
+        } catch (const std::exception &e) {
             std::cerr << "Ошибка при обработке " << site_name << ": " << e.what() << std::endl;
         }
     }
-
-    std::cerr << "Не удалось обработать слово: " << word << std::endl;
 }
 
 void monitor_new_words(DBuse &db)
@@ -524,7 +538,8 @@ DownloadResult follow_redirects(const std::string &initial_url, int max_redirect
 {
     std::string current_url = initial_url;
     DownloadResult result;
-
+    if (initial_url.empty())
+        return result;
     for (int i = 0; i < max_redirects; ++i)
     {
         try
@@ -613,6 +628,7 @@ DownloadResult follow_redirects(const std::string &initial_url, int max_redirect
         catch (const std::exception &e)
         {
             std::cerr << "Ошибка при обработке URL " << current_url << ": " << e.what() << std::endl;
+            std::cerr << "Error following redirects for " << initial_url << ": " << e.what() << std::endl;
             result.html.clear();
             break;
         }
