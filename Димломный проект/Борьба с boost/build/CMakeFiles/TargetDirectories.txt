@@ -1,3 +1,0 @@
-D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Борьба с boost/build/CMakeFiles/test_boost.dir
-D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Борьба с boost/build/CMakeFiles/ALL_BUILD.dir
-D:/Курс Разработчик на С++/Базовое программировние в С++/Homework_base_programming/Димломный проект/Борьба с boost/build/CMakeFiles/ZERO_CHECK.dir

@@ -198,16 +198,28 @@ void DBuse::insert_data(const std::string &table,
     }
 }
 
-void DBuse::create_tables()
-{
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
+void DBuse::create_tables() {
+    execute_in_transaction([&](pqxx::work &txn) {
         txn.exec(
             "CREATE TABLE IF NOT EXISTS words("
             "id SERIAL PRIMARY KEY, "
-            "word VARCHAR(100) NOT NULL UNIQUE)"
+            "word VARCHAR(100) NOT NULL UNIQUE, "
+            "status VARCHAR(20) DEFAULT 'pending', "  // 'pending'|'processing'|'completed'
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "processed_at TIMESTAMP NULL)"
         );
-        std::cout << "Таблица words успешно создана\n"; });
+        
+        txn.exec(
+            "CREATE TABLE IF NOT EXISTS word_urls("
+            "id SERIAL PRIMARY KEY, "
+            "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
+            "url VARCHAR(500) NOT NULL, "
+            "html_content TEXT, "
+            "word_count INTEGER DEFAULT 0, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "UNIQUE(word_id, url))"
+        );
+    });
 }
 
 void DBuse::add_unique_constraint()
@@ -256,44 +268,53 @@ void DBuse::add_word_to_tables(const std::string &word)
             }
         } });
 }
-json::json DBuse::process_word_request(const std::string &word)
-{
-    json::json response;
 
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
-        // 1. Проверяем, есть ли слово в базе
+json::json DBuse::process_word_request(const std::string& word) {
+    json::json response;
+    
+    execute_in_transaction([&](pqxx::work& txn) {
+        // Проверяем существование слова
         auto word_result = txn.exec_params(
-            "SELECT id FROM words WHERE word = $1", 
+            "SELECT id, status FROM words WHERE word = $1", 
             word
         );
         
         if (!word_result.empty()) {
-            // Слово найдено - получаем связанные данные
             int word_id = word_result[0][0].as<int>();
+            std::string status = word_result[0][1].as<std::string>();
             
-            auto urls_result = txn.exec_params(
-                "SELECT url, html_content, word_count FROM word_urls "
-                "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
-                word_id
-            );
-            
-            json::json urls_json;
-            for (auto row : urls_result) {
-                urls_json.push_back({
-                    {"url", row["url"].as<std::string>()},
-                    {"count", row["word_count"].as<int>()},
-                    {"content", row["html_content"].as<std::string>()}
-                });
+            if (status == "completed") {
+                // Слово обработано - возвращаем результаты
+                auto urls_result = txn.exec_params(
+                    "SELECT url, html_content, word_count FROM word_urls "
+                    "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
+                    word_id
+                );
+                
+                json::json urls_json;
+                for (auto row : urls_result) {
+                    urls_json.push_back({
+                        {"url", row["url"].as<std::string>()},
+                        {"count", row["word_count"].as<int>()},
+                        {"content", row["html_content"].as<std::string>()}
+                    });
+                }
+                
+                response = {
+                    {"status", "completed"},
+                    {"word_id", word_id},
+                    {"urls", urls_json}
+                };
+            } else {
+                // Слово еще в обработке
+                response = {
+                    {"status", status},
+                    {"word_id", word_id},
+                    {"message", "Слово в процессе обработки"}
+                };
             }
-            
-            response = {
-                {"status", "found"},
-                {"word_id", word_id},
-                {"urls", urls_json}
-            };
         } else {
-            // Слово не найдено - добавляем его
+            // Добавляем новое слово
             auto insert_result = txn.exec_params(
                 "INSERT INTO words (word) VALUES ($1) RETURNING id",
                 word
@@ -303,13 +324,51 @@ json::json DBuse::process_word_request(const std::string &word)
                 int new_word_id = insert_result[0][0].as<int>();
                 response = {
                     {"status", "pending"},
-                    {"message", "Слово добавлено в очередь на обработку"},
-                    {"word_id", new_word_id}
+                    {"word_id", new_word_id},
+                    {"message", "Слово добавлено в очередь на обработку"}
                 };
-            } else {
-                throw std::runtime_error("Не удалось добавить слово");
             }
-        } });
+        }
+    });
+    
+    return response;
+}
 
+json::json DBuse::check_word_status(int word_id) {
+    json::json response;
+    
+    execute_in_transaction([&](pqxx::work& txn) {
+        auto result = txn.exec_params(
+            "SELECT status FROM words WHERE id = $1",
+            word_id
+        );
+        
+        if (!result.empty()) {
+            std::string status = result[0][0].as<std::string>();
+            response["status"] = status;
+            
+            if (status == "completed") {
+                // Если обработка завершена, возвращаем результаты
+                auto urls_result = txn.exec_params(
+                    "SELECT url, html_content, word_count FROM word_urls "
+                    "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
+                    word_id
+                );
+                
+                json::json urls_json;
+                for (auto row : urls_result) {
+                    urls_json.push_back({
+                        {"url", row["url"].as<std::string>()},
+                        {"count", row["word_count"].as<int>()},
+                        {"content", row["html_content"].as<std::string>()}
+                    });
+                }
+                response["urls"] = urls_json;
+            }
+        } else {
+            throw std::runtime_error("Word not found");
+        }
+    });
+    
     return response;
 }

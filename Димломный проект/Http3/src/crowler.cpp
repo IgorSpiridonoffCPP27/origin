@@ -184,6 +184,7 @@ void save_links_with_counts(DBuse &db,
                             const std::vector<std::pair<std::string, std::string>> &links_content,
                             int current_depth)
 {
+
     // Получаем строку из базы данных
     std::string db_string = db.get_full_word_string(word);
     if (db_string.empty())
@@ -198,7 +199,11 @@ void save_links_with_counts(DBuse &db,
         std::cerr << "Слово не найдено в базе данных" << std::endl;
         return;
     }
-
+    // Когда начинаете обработку слова:
+    db.execute_in_transaction([&](pqxx::work &txn)
+                              { txn.exec_params(
+                                    "UPDATE words SET status = 'processing' WHERE id = $1",
+                                    word_id); });
     // Сохраняем базовую страницу с подсчетом статистики
     auto base_stats = count_word_occurrences(base_html, db_string);
     int base_total = 0;
@@ -227,6 +232,11 @@ void save_links_with_counts(DBuse &db,
 
     std::wcout << L"Статистика сохранена в базу данных для слова: "
                << utf8_to_wstring(word) << std::endl;
+    // Когда обработка завершена:
+    db.execute_in_transaction([&](pqxx::work &txn)
+                              { txn.exec_params(
+                                    "UPDATE words SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = $1",
+                                    word_id); });
 }
 
 std::vector<std::string> extract_links_from_html(const std::string &html_content, const std::string &base_url)
@@ -382,31 +392,35 @@ bool check_content(const std::string &content, const std::string &db_string)
 }
 // Модифицированная рекурсивная функция с улучшенным логированием
 void save_links_recursive(DBuse &db, const std::string &word, const std::string &site_name,
-                         const std::string &url, const std::string &html_content,
-                         int recursion_depth, ThreadPool& pool,
-                         int current_depth = 0, const std::string &parent_path = "") {
-    
+                          const std::string &url, const std::string &html_content,
+                          int recursion_depth, ThreadPool &pool,
+                          int current_depth = 0, const std::string &parent_path = "")
+{
+
     std::string current_path = parent_path.empty() ? "1" : parent_path + "." + std::to_string(current_depth);
     std::cout << "Проверяю " << current_path << " URL: " << url << std::endl;
 
     int word_id = db.get_word_id(word);
-    if (word_id == -1) {
+    if (word_id == -1)
+    {
         std::cerr << "Слово не найдено в базе данных" << std::endl;
         return;
     }
 
     // Проверяем, не обрабатывался ли этот URL ранее
-    if (db.url_exists_for_word(word_id, url)) {
+    if (db.url_exists_for_word(word_id, url))
+    {
         std::cout << "URL уже был обработан ранее, пропускаем: " << url << std::endl;
         return;
     }
 
     std::string db_string = db.get_full_word_string(word);
-    if (db_string.empty()) db_string = word;
+    if (db_string.empty())
+        db_string = word;
 
     auto all_links = extract_links_from_html(html_content, url);
     std::cout << "Всего найдено ссылок: " << all_links.size() << std::endl;
-    
+
     std::vector<std::pair<std::string, std::string>> valid_links;
     std::mutex valid_links_mutex;
     std::vector<std::future<void>> futures;
@@ -414,18 +428,21 @@ void save_links_recursive(DBuse &db, const std::string &word, const std::string 
     const int max_links_to_process = 3;
     std::atomic<int> found_links_count(0);
 
-    for (size_t i = 0; i < all_links.size() && found_links_count < max_links_to_process; ++i) {
+    for (size_t i = 0; i < all_links.size() && found_links_count < max_links_to_process; ++i)
+    {
         const auto &link = all_links[i];
         std::string link_path = current_path + "." + std::to_string(i + 1);
 
         if (link.find(url.substr(0, url.find("://") + 3)) == std::string::npos ||
-            link.find('#') != std::string::npos) {
+            link.find('#') != std::string::npos)
+        {
             std::cout << "  " << link_path << " Пропускаем внешнюю/якорную ссылку: " << link << std::endl;
             continue;
         }
 
         futures.emplace_back(
-            pool.enqueue([&, link, link_path]() {
+            pool.enqueue([&, link, link_path]()
+                         {
                 try {
                     std::cout << "  " << link_path << " Проверяю ссылку: " << link << std::endl;
                     
@@ -457,33 +474,37 @@ void save_links_recursive(DBuse &db, const std::string &word, const std::string 
                     }
                 } catch (const std::exception &e) {
                     std::cerr << "  " << link_path << " Ошибка при проверке ссылки: " << e.what() << std::endl;
-                }
-            })
-        );
+                } }));
     }
 
-    for (auto &future : futures) {
+    for (auto &future : futures)
+    {
         future.wait();
     }
 
-    if (!valid_links.empty()) {
+    if (!valid_links.empty())
+    {
         save_links_with_counts(db, word, site_name, url, html_content, valid_links, current_depth);
-        
-        if (current_depth < recursion_depth) {
-            for (const auto &[link, html] : valid_links) {
+
+        if (current_depth < recursion_depth)
+        {
+            for (const auto &[link, html] : valid_links)
+            {
                 save_links_recursive(db, word, site_name, link, html,
-                                   recursion_depth, pool, current_depth + 1, current_path);
+                                     recursion_depth, pool, current_depth + 1, current_path);
             }
         }
     }
 }
 
 // Модифицированная функция process_word
-void process_word(DBuse &db, const std::string &word, int recursion_depth = 2) {
+void process_word(DBuse &db, const std::string &word, int recursion_depth = 2)
+{
     std::cout << "\nОбработка слова: " << word << std::endl;
-    
+
     int word_id = db.get_word_id(word);
-    if (word_id == -1) {
+    if (word_id == -1)
+    {
         std::cerr << "Слово не найдено в базе данных" << std::endl;
         return;
     }
@@ -499,21 +520,27 @@ void process_word(DBuse &db, const std::string &word, int recursion_depth = 2) {
         {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
         {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
 
-    for (const auto &[site_name, url] : url_templates) {
-        try {
+    for (const auto &[site_name, url] : url_templates)
+    {
+        try
+        {
             // Проверяем, не обрабатывался ли этот шаблон URL ранее
-            if (db.url_exists_for_word(word_id, url)) {
+            if (db.url_exists_for_word(word_id, url))
+            {
                 std::cout << "Шаблон URL уже обработан: " << url << "\n";
                 continue;
             }
 
             DownloadResult result = follow_redirects(url);
-            if (!result.html.empty()) {
+            if (!result.html.empty())
+            {
                 save_links_recursive(db, word, site_name, result.final_url,
-                                   result.html, recursion_depth, pool);
+                                     result.html, recursion_depth, pool);
                 return;
             }
-        } catch (const std::exception &e) {
+        }
+        catch (const std::exception &e)
+        {
             std::cerr << "Ошибка при обработке " << site_name << ": " << e.what() << std::endl;
         }
     }
@@ -654,10 +681,11 @@ DownloadResult follow_redirects(const std::string &initial_url, int max_redirect
 
     return result;
 }
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     bool force_restart = false;
-    if (argc > 1 && std::string(argv[1]) == "--force") {
+    if (argc > 1 && std::string(argv[1]) == "--force")
+    {
         force_restart = true;
         std::cout << "Режим принудительного перезапуска поиска\n";
     }
@@ -665,20 +693,23 @@ int main(int argc, char* argv[])
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
-    try {
+    try
+    {
         DBuse db("localhost", "HTTP", "test_postgres", "12345678");
         db.create_tables();
-        
+
         auto initial_words = db.get_all_words();
         {
             std::lock_guard<std::mutex> lock(data_mutex);
             int max_id = db.get_max_word_id();
             processed_word_ids.insert(max_id);
 
-            for (const auto &word : initial_words) {
+            for (const auto &word : initial_words)
+            {
                 int word_id = db.get_word_id(word);
-                if (word_id != -1 && (force_restart || !db.url_exists_for_word(word_id, 
-                    "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)))) {
+                if (word_id != -1 && (force_restart || !db.url_exists_for_word(word_id,
+                                                                               "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word))))
+                {
                     process_word(db, word);
                 }
             }
@@ -690,7 +721,8 @@ int main(int argc, char* argv[])
         keep_running = false;
         monitor_thread.join();
     }
-    catch (const std::exception &e) {
+    catch (const std::exception &e)
+    {
         std::cerr << "Ошибка: " << e.what() << std::endl;
         keep_running = false;
         return 1;

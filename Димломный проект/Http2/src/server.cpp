@@ -59,6 +59,12 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
                 res.body() = db.process_word_request(word).dump();
                 res.result(http::status::ok);
             }
+            else if (req.target() == "/check_status") {
+                auto body = nlohmann::json::parse(req.body());
+                int word_id = body["word_id"].get<int>();
+                res.body() = db.check_word_status(word_id).dump();
+                res.result(http::status::ok);
+            }
             else if (req.target().starts_with("/write")) {
                 std::string table = get_query_param(req.target(), "table");
     nlohmann::json response;

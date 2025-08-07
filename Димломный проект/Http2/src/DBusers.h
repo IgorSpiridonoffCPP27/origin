@@ -33,7 +33,7 @@ public:
     void add_unique_constraint();
     void add_word_to_tables(const std::string &word);
     json::json process_word_request(const std::string &word);
-
+    json::json check_word_status(int word_id);
 private:
     pqxx::connection conn;
 

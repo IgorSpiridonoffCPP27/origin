@@ -41,8 +41,7 @@ http::response<http::string_body> call_api(const std::string& target, http::verb
 }
 
 std::string generate_html() {
-    return R"html(
-<!DOCTYPE html>
+    return R"delimiter(<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -58,6 +57,7 @@ std::string generate_html() {
         .url { font-weight: bold; color: #06c; }
         .count { color: #666; }
         .pending { color: #ff9900; }
+        .processing { color: #0099ff; }
     </style>
 </head>
 <body>
@@ -71,6 +71,59 @@ std::string generate_html() {
     <div id="result"></div>
 
     <script>
+        async function checkStatus(word_id) {
+            try {
+                const response = await fetch('/api/check_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ word_id })
+                });
+                
+                return await response.json();
+            } catch (error) {
+                console.error('Error checking status:', error);
+                return { status: 'error' };
+            }
+        }
+
+        async function pollStatus(word_id) {
+            const resultDiv = document.getElementById('result');
+            
+            while (true) {
+                const data = await checkStatus(word_id);
+                
+                if (data.status === 'completed') {
+                    // Показываем результаты
+                    let html = `<h3>Результаты обработки:</h3>`;
+                    if (data.urls && data.urls.length > 0) {
+                        data.urls.forEach(item => {
+                            html += `
+                                <div class="url-item">
+                                    <div class="url">${item.url}</div>
+                                    <div class="count">Найдено ${item.count} раз</div>
+                                    <div class="content">${item.content.substring(0, 100)}...</div>
+                                </div>
+                            `;
+                        });
+                    } else {
+                        html += `<p>По этому слову не найдено данных</p>`;
+                    }
+                    resultDiv.innerHTML = html;
+                    break;
+                } else if (data.status === 'processing') {
+                    resultDiv.innerHTML = `<p class="processing">Слово обрабатывается, пожалуйста, подождите...</p>`;
+                } else if (data.status === 'pending') {
+                    resultDiv.innerHTML = `<p class="pending">Слово в очереди на обработку...</p>`;
+                } else {
+                    resultDiv.innerHTML = `<p style="color: red;">Ошибка при проверке статуса</p>`;
+                    break;
+                }
+                
+                // Проверяем статус каждые 2 секунды
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+
         document.getElementById('search-button').addEventListener('click', async () => {
             const word = document.getElementById('search-input').value.trim();
             if (!word) return;
@@ -87,7 +140,8 @@ std::string generate_html() {
                 
                 const data = await response.json();
                 
-                if (data.status === 'found') {
+                if (data.status === 'completed') {
+                    // Показываем результаты сразу
                     let html = `<h3>Результаты для "${word}":</h3>`;
                     if (data.urls && data.urls.length > 0) {
                         data.urls.forEach(item => {
@@ -103,13 +157,10 @@ std::string generate_html() {
                         html += `<p>Нет данных по этому слову</p>`;
                     }
                     resultDiv.innerHTML = html;
-                } else if (data.status === 'pending') {
-                    resultDiv.innerHTML = `
-                        <p class="pending">
-                            Слово "${word}" добавлено в очередь на обработку. 
-                            Пожалуйста, проверьте позже.
-                        </p>
-                    `;
+                } else {
+                    // Начинаем опрос статуса
+                    resultDiv.innerHTML = `<p class="pending">Слово "${word}" добавлено в очередь на обработку. Ожидайте...</p>`;
+                    pollStatus(data.word_id);
                 }
             } catch (error) {
                 resultDiv.innerHTML = `<p style="color: red;">Ошибка: ${error.message}</p>`;
@@ -117,8 +168,7 @@ std::string generate_html() {
         });
     </script>
 </body>
-</html>
-)html";
+</html>)delimiter";
 }
 
 void handle_request(http::request<http::string_body>& req, http::response<http::string_body>& res) {

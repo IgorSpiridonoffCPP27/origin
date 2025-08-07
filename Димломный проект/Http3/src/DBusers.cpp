@@ -204,19 +204,22 @@ void DBuse::create_tables() {
         txn.exec(
             "CREATE TABLE IF NOT EXISTS words("
             "id SERIAL PRIMARY KEY, "
-            "word VARCHAR(100) NOT NULL UNIQUE)"
+            "word VARCHAR(100) NOT NULL UNIQUE, "
+            "status VARCHAR(20) DEFAULT 'pending', "  // 'pending'|'processing'|'completed'
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "processed_at TIMESTAMP NULL)"
         );
+        
         txn.exec(
             "CREATE TABLE IF NOT EXISTS word_urls("
             "id SERIAL PRIMARY KEY, "
             "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
             "url VARCHAR(500) NOT NULL, "
             "html_content TEXT, "
-            "word_count INTEGER DEFAULT 0, "  // Добавляем поле для хранения количества вхождений
+            "word_count INTEGER DEFAULT 0, "
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
             "UNIQUE(word_id, url))"
         );
-        std::cout << "Таблицы успешно созданы\n";
     });
 }
 
