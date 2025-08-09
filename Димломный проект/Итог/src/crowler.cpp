@@ -1,606 +1,585 @@
 #include "pch.h"
 #include "DBusers.h"
-#pragma comment(lib, "shell32.lib")
+#include <gumbo.h>
+#include <boost/asio/thread_pool.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/beast/ssl.hpp>
+#include <atomic>
+#include <queue>
+#include <shared_mutex>
+#include <fstream>
+#include <csignal>
+#include <openssl/crypto.h>
+#include <boost/beast/core/detail/base64.hpp>
+#include <iomanip>
+#include <sstream>
+#include <boost/tokenizer.hpp>
+
+// Глобальный логгер
+class Logger
+{
+public:
+    static Logger &instance()
+    {
+        static Logger logger;
+        return logger;
+    }
+
+    void log(const std::string &message)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::cout << "[LOG] " << message << std::endl;
+        logfile_ << "[LOG] " << message << std::endl;
+        logfile_.flush();
+    }
+
+private:
+    Logger()
+    {
+        logfile_.open("crawler_log.txt", std::ios::app);
+        logfile_ << "\n\n===== NEW SESSION =====" << std::endl;
+        logfile_ << "Starting at: " << __TIMESTAMP__ << std::endl;
+    }
+
+    ~Logger()
+    {
+        logfile_ << "===== SESSION END =====" << std::endl;
+        logfile_.close();
+    }
+
+    std::ofstream logfile_;
+    std::mutex mutex_;
+};
+
+#define LOG(msg) Logger::instance().log(msg)
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
 namespace ssl = net::ssl;
+using tcp = net::ip::tcp;
 
-// Добавляем глобальный контейнер для хранения посещенных URL
-std::mutex visited_urls_mutex;
-std::unordered_set<std::string> visited_urls;
+// Конфигурация краулера
+struct CrawlerConfig
+{
+    int max_redirects = 5;
+    int recursion_depth = 2;
+    int max_connections = 10;
+    int max_links_per_page = 3;
+    std::chrono::seconds poll_interval{5};
+};
 
-// Модифицированный ThreadPool с поддержкой возвращаемых значений
-class ThreadPool
+class ThreadSafeSet
 {
 public:
-    explicit ThreadPool(size_t threads) : stop(false)
+    bool insert(const std::string &value)
     {
-        for (size_t i = 0; i < threads; ++i)
-        {
-            workers.emplace_back([this]
-                                 {
-                for(;;) {
-                    std::function<void()> task;
-                    {
-                        std::unique_lock<std::mutex> lock(queue_mutex);
-                        condition.wait(lock, [this]{ return stop || !tasks.empty(); });
-                        if(stop && tasks.empty()) return;
-                        task = std::move(tasks.front());
-                        tasks.pop();
-                    }
-                    task();
-                } });
-        }
+        std::unique_lock lock(mutex_);
+        return visited_.insert(value).second;
     }
 
-    template <class F, class... Args>
-    auto enqueue(F &&f, Args &&...args) -> std::future<typename std::result_of<F(Args...)>::type>
+    bool contains(const std::string &value) const
     {
-        using return_type = typename std::result_of<F(Args...)>::type;
-
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-
-        std::future<return_type> res = task->get_future();
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            if (stop)
-                throw std::runtime_error("enqueue on stopped ThreadPool");
-            tasks.emplace([task]()
-                          { (*task)(); });
-        }
-        condition.notify_one();
-        return res;
+        std::shared_lock lock(mutex_);
+        return visited_.find(value) != visited_.end();
     }
 
-    ~ThreadPool()
+    void clear()
     {
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            stop = true;
-        }
-        condition.notify_all();
-        for (std::thread &worker : workers)
-            worker.join();
+        std::unique_lock lock(mutex_);
+        visited_.clear();
     }
 
 private:
-    std::vector<std::thread> workers;
-    std::queue<std::function<void()>> tasks;
-    std::mutex queue_mutex;
-    std::condition_variable condition;
-    bool stop;
+    mutable std::shared_mutex mutex_;
+    std::unordered_set<std::string> visited_;
 };
 
-// Новая структура для хранения статистики по словам
-struct WordStats
+// Функция для URL-кодирования строк
+std::string url_encode(const std::string &value)
 {
-    std::string word;
-    int count;
-};
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
 
-// Структура для хранения результата
-struct DownloadResult
-{
-    std::string html;
-    std::string final_url;
-};
-
-// Прототип функции
-DownloadResult follow_redirects(const std::string &initial_url, int max_redirects = 5);
-std::string normalize_string(const std::string &str);
-// Глобальные переменные для управления потоками
-std::atomic<bool> keep_running(true);
-std::mutex data_mutex;
-std::set<int> processed_word_ids;
-
-std::wstring utf8_to_wstring(const std::string &str)
-{
-    if (str.empty())
-        return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-    std::wstring wstr(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size_needed);
-    return wstr;
-}
-std::string prepare_wiki_url(const std::string &word)
-{
-    std::string result;
-    for (char c : word)
+    for (auto c : value)
     {
-        if (c == ' ')
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (std::isalnum(uc) || uc == '-' || uc == '_' || uc == '.' || uc == '~')
         {
-            result += '_';
+            escaped << c;
         }
         else
         {
-            result += c;
+            escaped << '%' << std::setw(2) << static_cast<int>(uc);
         }
     }
-    return result;
+
+    return escaped.str();
 }
 
-// Функция для подсчета вхождений слов
-std::vector<WordStats> count_word_occurrences(const std::string &content, const std::string &search_words)
+class HtmlParser
 {
-    std::vector<WordStats> stats;
-    std::string normalized_content = normalize_string(content);
-    std::string normalized_words = normalize_string(search_words);
-
-    std::istringstream iss(normalized_words);
-    std::vector<std::string> words_to_count((std::istream_iterator<std::string>(iss)),
-                                            std::istream_iterator<std::string>());
-
-    for (const auto &word : words_to_count)
+public:
+    static std::vector<std::string> extract_links(const std::string &html, const std::string &base_url)
     {
-        int count = 0;
-        size_t pos = 0;
-        while ((pos = normalized_content.find(word, pos)) != std::string::npos)
+        std::vector<std::string> links;
+        GumboOutput *output = gumbo_parse(html.c_str());
+        if (!output)
         {
-            count++;
-            pos += word.length();
-        }
-        stats.push_back({word, count});
-    }
-
-    return stats;
-}
-
-// Модифицированная функция для сохранения статистики в базу данных
-void save_links_with_counts(DBuse &db,
-                            const std::string &word,
-                            const std::string &site_name,
-                            const std::string &base_url,
-                            const std::string &base_html,
-                            const std::vector<std::pair<std::string, std::string>> &links_content,
-                            int current_depth)
-{
-
-    // Получаем строку из базы данных
-    std::string db_string = db.get_full_word_string(word);
-    if (db_string.empty())
-    {
-        db_string = word;
-    }
-
-    // Получаем ID слова
-    int word_id = db.get_word_id(word);
-    if (word_id == -1)
-    {
-        std::cerr << "Слово не найдено в базе данных" << std::endl;
-        return;
-    }
-    // Когда начинаете обработку слова:
-    db.execute_in_transaction([&](pqxx::work &txn)
-                              { txn.exec_params(
-                                    "UPDATE words SET status = 'processing' WHERE id = $1",
-                                    word_id); });
-    // Сохраняем базовую страницу с подсчетом статистики
-    auto base_stats = count_word_occurrences(base_html, db_string);
-    int base_total = 0;
-    for (const auto &ws : base_stats)
-    {
-        base_total += ws.count;
-    }
-
-    // Сохраняем базовый URL в базу данных
-    db.save_word_url(word_id, base_url, base_html, base_total);
-
-    // Обрабатываем каждую релевантную страницу
-    for (const auto &[url, html] : links_content)
-    {
-        // Подсчитываем вхождения слов
-        auto stats = count_word_occurrences(html, db_string);
-        int total = 0;
-        for (const auto &ws : stats)
-        {
-            total += ws.count;
+            LOG("Gumbo parse failed for HTML content");
+            return links;
         }
 
-        // Сохраняем URL в базу данных с подсчитанной статистикой
-        db.save_word_url(word_id, url, html, total);
-    }
-
-    std::wcout << L"Статистика сохранена в базу данных для слова: "
-               << utf8_to_wstring(word) << std::endl;
-    // Когда обработка завершена:
-    db.execute_in_transaction([&](pqxx::work &txn)
-                              { txn.exec_params(
-                                    "UPDATE words SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = $1",
-                                    word_id); });
-}
-
-std::vector<std::string> extract_links_from_html(const std::string &html_content, const std::string &base_url)
-{
-    std::vector<std::string> links;
-    if (html_content.empty())
+        extract_links(output->root, base_url, links);
+        gumbo_destroy_output(&kGumboDefaultOptions, output);
         return links;
-    try
+    }
+
+    static std::string normalize_url(const std::string &url, const std::string &base_url)
     {
-        // Регулярное выражение для поиска ссылок в HTML
-        static const boost::regex link_regex(
-            "<a\\s+[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>",
-            boost::regex::icase | boost::regex::optimize);
-
-        boost::smatch matches;
-        std::string::const_iterator start = html_content.begin();
-        std::string::const_iterator end = html_content.end();
-
-        while (boost::regex_search(start, end, matches, link_regex))
+        if (url.empty() || url[0] == '#' || url.find("javascript:") == 0)
         {
-            std::string link = matches[1].str();
-
-            // Пропускаем якорные ссылки и javascript
-            if (!link.empty() && link[0] != '#' &&
-                link.find("javascript:") == std::string::npos)
-            {
-
-                // Если ссылка относительная, преобразуем в абсолютную
-                if (link.find("://") == std::string::npos)
-                {
-                    if (link[0] == '/')
-                    {
-                        // Абсолютный путь на том же домене
-                        size_t protocol_pos = base_url.find("://");
-                        size_t domain_end = base_url.find('/', protocol_pos + 3);
-                        if (domain_end == std::string::npos)
-                        {
-                            domain_end = base_url.length();
-                        }
-                        link = base_url.substr(0, domain_end) + link;
-                    }
-                    else
-                    {
-                        // Относительный путь
-                        size_t last_slash = base_url.rfind('/');
-                        if (last_slash != std::string::npos)
-                        {
-                            link = base_url.substr(0, last_slash + 1) + link;
-                        }
-                    }
-                }
-
-                links.push_back(link);
-            }
-
-            start = matches[0].second;
+            return "";
         }
-    }
-    catch (const boost::regex_error &e)
-    {
-        std::cerr << "Ошибка при парсинге HTML: " << e.what() << std::endl;
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Error extracting links: " << e.what() << std::endl;
-    }
 
-    return links;
-}
-// Функция для нормализации строки (приведение к нижнему регистру, удаление лишних пробелов)
-std::string normalize_string(const std::string &str)
-{
-    if (str.empty())
-        return "";
-    try
-    {
-        // 1. Извлекаем содержимое между тегами <body> и </body>
-        static const boost::regex body_regex("<body[^>]*>(.*?)</body>", boost::regex::icase);
-        boost::smatch matches;
-        std::string body_content;
-
-        if (boost::regex_search(str, matches, body_regex))
+        if (url.find("://") != std::string::npos)
         {
-            body_content = matches[1].str();
+            return url;
+        }
+
+        size_t protocol_pos = base_url.find("://");
+        if (protocol_pos == std::string::npos)
+        {
+            return "";
+        }
+
+        size_t domain_end = base_url.find('/', protocol_pos + 3);
+        if (domain_end == std::string::npos)
+        {
+            domain_end = base_url.length();
+        }
+
+        if (url[0] == '/')
+        {
+            return base_url.substr(0, domain_end) + url;
         }
         else
         {
-            // Если теги body не найдены, работаем со всем содержимым
-            body_content = str;
+            size_t last_slash = base_url.rfind('/');
+            if (last_slash != std::string::npos && last_slash >= protocol_pos + 3)
+            {
+                return base_url.substr(0, last_slash + 1) + url;
+            }
         }
-
-        // 2. Удаляем все HTML-теги
-        static const boost::regex html_tags("<[^>]*>");
-        std::string text = boost::regex_replace(body_content, html_tags, " ");
-
-        // 3. Заменяем HTML-сущности на соответствующие символы
-        static const std::vector<std::pair<boost::regex, std::string>> html_entities = {
-            {boost::regex("&nbsp;"), " "},
-            {boost::regex("&amp;"), "&"},
-            {boost::regex("&lt;"), "<"},
-            {boost::regex("&gt;"), ">"}};
-
-        for (const auto &[regex, replacement] : html_entities)
-        {
-            text = boost::regex_replace(text, regex, replacement);
-        }
-
-        // 4. Удаляем множественные пробелы
-        static const boost::regex multiple_spaces("\\s+");
-        text = boost::regex_replace(text, multiple_spaces, " ");
-
-        // 5. Приводим к нижнему регистру и обрезаем пробелы
-        boost::algorithm::to_lower(text);
-        boost::algorithm::trim(text);
-        // Удаляем содержимое <script> тегов
-        static const boost::regex script_regex("<script[^>]*>.*?</script>", boost::regex::icase);
-        text = boost::regex_replace(text, script_regex, " ");
-
-        // Удаляем содержимое <style> тегов
-        static const boost::regex style_regex("<style[^>]*>.*?</style>", boost::regex::icase);
-        text = boost::regex_replace(text, style_regex, " ");
-        return text;
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Error in normalize_string: " << e.what() << std::endl;
         return "";
     }
-}
 
-// Функция проверки содержимого страницы на соответствие словам из базы
-bool check_content(const std::string &content, const std::string &db_string)
-{
-    // Нормализуем строку из базы и разбиваем на отдельные слова
-    std::string normalized_db = normalize_string(db_string);
-    std::istringstream iss(normalized_db);
-    std::vector<std::string> db_words((std::istream_iterator<std::string>(iss)),
-                                      std::istream_iterator<std::string>());
-
-    // Нормализуем содержимое страницы
-    std::string normalized_content = normalize_string(content);
-
-    // Проверяем наличие хотя бы одного слова из базы в содержимом
-    for (const auto &word : db_words)
+private:
+    static void extract_links(GumboNode *node, const std::string &base_url, std::vector<std::string> &links)
     {
-        if (normalized_content.find(word) != std::string::npos)
+        if (node->type != GUMBO_NODE_ELEMENT)
+            return;
+
+        if (node->v.element.tag == GUMBO_TAG_A)
         {
-            return true;
-        }
-    }
-
-    return false;
-}
-// Модифицированная рекурсивная функция с улучшенным логированием
-void save_links_recursive(DBuse &db, const std::string &word, const std::string &site_name,
-                          const std::string &url, const std::string &html_content,
-                          int recursion_depth, ThreadPool &pool,
-                          int current_depth = 0, const std::string &parent_path = "")
-{
-
-    std::string current_path = parent_path.empty() ? "1" : parent_path + "." + std::to_string(current_depth);
-    std::cout << "Проверяю " << current_path << " URL: " << url << std::endl;
-
-    int word_id = db.get_word_id(word);
-    if (word_id == -1)
-    {
-        std::cerr << "Слово не найдено в базе данных" << std::endl;
-        return;
-    }
-
-    // Проверяем, не обрабатывался ли этот URL ранее
-    if (db.url_exists_for_word(word_id, url))
-    {
-        std::cout << "URL уже был обработан ранее, пропускаем: " << url << std::endl;
-        return;
-    }
-
-    std::string db_string = db.get_full_word_string(word);
-    if (db_string.empty())
-        db_string = word;
-
-    auto all_links = extract_links_from_html(html_content, url);
-    std::cout << "Всего найдено ссылок: " << all_links.size() << std::endl;
-
-    std::vector<std::pair<std::string, std::string>> valid_links;
-    std::mutex valid_links_mutex;
-    std::vector<std::future<void>> futures;
-
-    const int max_links_to_process = 3;
-    std::atomic<int> found_links_count(0);
-
-    for (size_t i = 0; i < all_links.size() && found_links_count < max_links_to_process; ++i)
-    {
-        const auto &link = all_links[i];
-        std::string link_path = current_path + "." + std::to_string(i + 1);
-
-        if (link.find(url.substr(0, url.find("://") + 3)) == std::string::npos ||
-            link.find('#') != std::string::npos)
-        {
-            std::cout << "  " << link_path << " Пропускаем внешнюю/якорную ссылку: " << link << std::endl;
-            continue;
-        }
-
-        futures.emplace_back(
-            pool.enqueue([&, link, link_path]()
-                         {
-                try {
-                    std::cout << "  " << link_path << " Проверяю ссылку: " << link << std::endl;
-                    
-                    // Проверяем в базе данных перед обработкой
-                    if (db.url_exists_for_word(word_id, link)) {
-                        std::cout << "  " << link_path << " URL уже есть в базе, пропускаем: " << link << std::endl;
-                        return;
-                    }
-
-                    DownloadResult nested_result = follow_redirects(link);
-
-                    if (!nested_result.html.empty() && check_content(nested_result.html, db_string)) {
-                        {
-                            std::lock_guard<std::mutex> lock(visited_urls_mutex);
-                            visited_urls.insert(nested_result.final_url);
-                        }
-                        
-                        {
-                            std::lock_guard<std::mutex> lock(valid_links_mutex);
-                            if (found_links_count < max_links_to_process) {
-                                valid_links.emplace_back(nested_result.final_url, nested_result.html);
-                                found_links_count++;
-                            }
-                        }
-                        
-                        std::cout << "    " << link_path << " ✓ Найдены совпадения\n";
-                    } else {
-                        std::cout << "    " << link_path << " ✗ Не содержит нужных слов\n";
-                    }
-                } catch (const std::exception &e) {
-                    std::cerr << "  " << link_path << " Ошибка при проверке ссылки: " << e.what() << std::endl;
-                } }));
-    }
-
-    for (auto &future : futures)
-    {
-        future.wait();
-    }
-
-    if (!valid_links.empty())
-    {
-        save_links_with_counts(db, word, site_name, url, html_content, valid_links, current_depth);
-
-        if (current_depth < recursion_depth)
-        {
-            for (const auto &[link, html] : valid_links)
+            GumboAttribute *href = gumbo_get_attribute(&node->v.element.attributes, "href");
+            if (href)
             {
-                save_links_recursive(db, word, site_name, link, html,
-                                     recursion_depth, pool, current_depth + 1, current_path);
-            }
-        }
-    }
-}
-
-// Модифицированная функция process_word
-void process_word(DBuse &db, const std::string &word, int recursion_depth = 2)
-{
-    std::cout << "\nОбработка слова: " << word << std::endl;
-
-    int word_id = db.get_word_id(word);
-    if (word_id == -1)
-    {
-        std::cerr << "Слово не найдено в базе данных" << std::endl;
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(visited_urls_mutex);
-        visited_urls.clear();
-    }
-
-    ThreadPool pool(4);
-
-    std::vector<std::pair<std::string, std::string>> url_templates = {
-        {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
-        {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
-
-    for (const auto &[site_name, url] : url_templates)
-    {
-        try
-        {
-            // Проверяем, не обрабатывался ли этот шаблон URL ранее
-            if (db.url_exists_for_word(word_id, url))
-            {
-                std::cout << "Шаблон URL уже обработан: " << url << "\n";
-                continue;
-            }
-
-            DownloadResult result = follow_redirects(url);
-            if (!result.html.empty())
-            {
-                save_links_recursive(db, word, site_name, result.final_url,
-                                     result.html, recursion_depth, pool);
-                return;
-            }
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "Ошибка при обработке " << site_name << ": " << e.what() << std::endl;
-        }
-    }
-}
-
-void monitor_new_words(DBuse &db)
-{
-    int last_processed_id = db.get_max_word_id();
-
-    while (keep_running)
-    {
-        try
-        {
-            auto new_words = db.get_new_words_since(last_processed_id);
-
-            if (!new_words.empty())
-            {
-                std::lock_guard<std::mutex> lock(data_mutex);
-                for (const auto &[word_id, word] : new_words)
+                std::string url = normalize_url(href->value, base_url);
+                if (!url.empty())
                 {
-                    if (processed_word_ids.insert(word_id).second)
-                    {
-                        process_word(db, word);
-                    }
+                    links.push_back(url);
                 }
-                last_processed_id = db.get_max_word_id();
             }
-
-            std::this_thread::sleep_for(std::chrono::seconds(5));
         }
-        catch (const std::exception &e)
+
+        GumboVector *children = &node->v.element.children;
+        for (unsigned int i = 0; i < children->length; ++i)
         {
-            std::cerr << "Ошибка в потоке мониторинга: " << e.what() << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+            extract_links(static_cast<GumboNode *>(children->data[i]), base_url, links);
         }
     }
-}
+};
 
-DownloadResult follow_redirects(const std::string &initial_url, int max_redirects)
+class Crawler
 {
-    std::string current_url = initial_url;
-    DownloadResult result;
-    if (initial_url.empty())
-        return result;
-    for (int i = 0; i < max_redirects; ++i)
+public:
+    Crawler(DBuse &db, const CrawlerConfig &config)
+        : db_(db), config_(config),
+          pool_(config.max_connections)
     {
         try
         {
-            // Парсинг URL
-            size_t protocol_pos = current_url.find("://");
-            if (protocol_pos == std::string::npos)
-            {
-                current_url = "https://" + current_url;
-                protocol_pos = current_url.find("://");
+            ssl_ctx_.set_default_verify_paths();
+            ssl_ctx_.set_verify_mode(ssl::verify_none);
+            LOG("SSL context initialized successfully (verify_none)");
+        }
+        catch (const std::exception &e)
+        {
+            LOG("SSL context error: " + std::string(e.what()));
+            throw;
+        }
+    }
+
+    ~Crawler()
+    {
+        stop();
+    }
+
+    void start()
+    {
+        LOG("Starting crawler");
+        running_ = true;
+        monitor_thread_ = std::thread([this]()
+                                      {
+            LOG("Monitor thread started");
+            try {
+                monitor_new_words();
+            } catch (const std::exception& e) {
+                LOG("Monitor thread exception: " + std::string(e.what()));
             }
+            LOG("Monitor thread exiting"); });
+    }
 
-            std::string protocol = current_url.substr(0, protocol_pos);
-            std::string host = current_url.substr(protocol_pos + 3);
-            std::string port = (protocol == "https") ? "443" : "80";
-            std::string target;
+    void stop()
+    {
+        if (!running_)
+            return;
 
-            size_t path_pos = host.find('/');
-            if (path_pos != std::string::npos)
+        LOG("Stopping crawler...");
+        running_ = false;
+
+        if (monitor_thread_.joinable())
+        {
+            monitor_thread_.join();
+            LOG("Monitor thread joined");
+        }
+
+        pool_.join();
+        LOG("Thread pool joined");
+        LOG("Crawler stopped");
+    }
+
+    net::thread_pool &get_pool() { return pool_; }
+
+    std::string prepare_wiki_url(const std::string &word)
+    {
+        std::string result;
+        for (char c : word)
+        {
+            if (c == ' ')
             {
-                target = host.substr(path_pos);
-                host = host.substr(0, path_pos);
+                result += '_';
             }
             else
             {
-                target = "/";
+                result += c;
             }
+        }
+        return url_encode(result);
+    }
 
-            size_t colon_pos = host.find(':');
-            if (colon_pos != std::string::npos)
+    void process_word(const std::string &word)
+    {
+        LOG("Processing word: " + word);
+        visited_urls_.clear();
+
+        try
+        {
+            int word_id = db_.get_word_id(word);
+            if (word_id == -1)
             {
-                port = host.substr(colon_pos + 1);
-                host = host.substr(0, colon_pos);
+                LOG("Word not found in database: " + word);
+                return;
             }
 
+            db_.execute_in_transaction([&](pqxx::work &txn)
+                                       { txn.exec_params(
+                                             "UPDATE words SET status = 'processing' WHERE id = $1",
+                                             word_id); });
+
+            std::vector<std::pair<std::string, std::string>> url_templates = {
+                {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
+                {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
+
+            bool processed = false;
+            for (const auto &[site_name, url] : url_templates)
+            {
+                if (db_.url_exists_for_word(word_id, url))
+                {
+                    LOG("URL already processed: " + url);
+                    continue;
+                }
+
+                LOG("Downloading: " + url);
+                auto result = download_page(url);
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                if (!result.ec && !result.html.empty())
+                {
+                    LOG("Download successful, size: " + std::to_string(result.html.size()));
+
+                    // Обрабатываем базовую страницу и рекурсивно связанные
+                    std::vector<std::pair<std::string, std::string>> base_page = {{result.final_url, result.html}};
+                    process_recursive(word, site_name, base_page, 0);
+
+                    processed = true;
+                    break;
+                }
+                else
+                {
+                    LOG("Download failed for " + url + ": " + result.ec.message());
+                }
+            }
+
+            db_.execute_in_transaction([&](pqxx::work &txn)
+                                       { txn.exec_params(
+                                             "UPDATE words SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = $1",
+                                             word_id); });
+
+            if (!processed)
+            {
+                LOG("No valid URLs processed for word: " + word);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            LOG("Error processing word '" + word + "': " + e.what());
+        }
+        LOG("Finished processing word: " + word);
+    }
+
+private:
+    DBuse &db_;
+    CrawlerConfig config_;
+    net::thread_pool pool_;
+    ssl::context ssl_ctx_{ssl::context::tlsv12_client};
+    std::atomic<bool> running_{true};
+    std::thread monitor_thread_;
+    ThreadSafeSet visited_urls_;
+
+    struct DownloadResult
+    {
+        std::string html;
+        std::string final_url;
+        beast::error_code ec;
+    };
+
+    // Основная функция рекурсивной обработки
+    void process_recursive(const std::string &word,
+                           const std::string &site_name,
+                           const std::vector<std::pair<std::string, std::string>> &pages,
+                           int current_depth)
+    {
+        LOG("Processing at depth: " + std::to_string(current_depth) + " with " +
+            std::to_string(pages.size()) + " pages");
+
+        if (pages.empty())
+            return;
+
+        save_pages(word, site_name, pages, current_depth);
+
+        if (current_depth >= config_.recursion_depth)
+        {
+            LOG("Max recursion depth reached: " + std::to_string(current_depth));
+            return;
+        }
+
+        std::vector<std::pair<std::string, std::string>> next_level_pages;
+        std::mutex next_level_mutex;
+        std::vector<std::future<void>> futures;
+
+        int word_id = db_.get_word_id(word);
+        if (word_id == -1)
+        {
+            LOG("Word ID not found for: " + word);
+            return;
+        }
+
+        std::string db_string = db_.get_full_word_string(word);
+        if (db_string.empty())
+            db_string = word;
+
+        for (const auto &[url, html] : pages)
+        {
+            // Используем boost::asio::post вместо executor().post()
+            futures.emplace_back(
+                boost::asio::post(
+                    pool_,
+                    std::packaged_task<void()>([&, url, html]()
+                                               {
+                    auto links = HtmlParser::extract_links(html, url);
+                    LOG("Found " + std::to_string(links.size()) + " links at: " + url);
+                    
+                    std::string current_host = get_host(url);
+                    int links_processed = 0;
+                    
+                    for (const auto& link : links) {
+                        if (links_processed >= config_.max_links_per_page) break;
+                        
+                        if (get_host(link) != current_host) {
+                            LOG("Skipping external link: " + link);
+                            continue;
+                        }
+                        
+                        if (visited_urls_.contains(link)) {
+                            LOG("Skipping visited URL: " + link);
+                            continue;
+                        }
+                        
+                        if (db_.url_exists_for_word(word_id, link)) {
+                            LOG("URL already in DB: " + link);
+                            continue;
+                        }
+                        
+                        LOG("Downloading link: " + link);
+                        auto result = download_page(link);
+                        if (result.ec || result.html.empty()) {
+                            LOG("Failed to download link: " + link);
+                            continue;
+                        }
+                        
+                        if (check_content(result.html, db_string)) {
+                            LOG("Valid content found: " + link);
+                            visited_urls_.insert(result.final_url);
+                            
+                            std::lock_guard lock(next_level_mutex);
+                            next_level_pages.emplace_back(result.final_url, result.html);
+                            links_processed++;
+                        } else {
+                            LOG("Content check failed: " + link);
+                        }
+                    } })));
+        }
+
+        for (auto &future : futures)
+        {
+            future.wait();
+        }
+
+        if (!next_level_pages.empty())
+        {
+            LOG("Found " + std::to_string(next_level_pages.size()) + " pages for next level");
+            process_recursive(word, site_name, next_level_pages, current_depth + 1);
+        }
+    }
+
+    // Сохраняет статистику для группы страниц
+    void save_pages(const std::string &word,
+                    const std::string &site_name,
+                    const std::vector<std::pair<std::string, std::string>> &pages,
+                    int depth)
+    {
+        LOG("Saving " + std::to_string(pages.size()) + " pages for word: " + word);
+
+        int word_id = db_.get_word_id(word);
+        if (word_id == -1)
+        {
+            LOG("Word ID not found for: " + word);
+            return;
+        }
+
+        std::string db_string = db_.get_full_word_string(word);
+        if (db_string.empty())
+            db_string = word;
+
+        try
+        {
+            db_.execute_in_transaction([&](pqxx::work &txn)
+                                       {
+                for (const auto& [url, html] : pages) {
+                    std::string plain_text = extract_plain_text(html);
+                    int count = count_word_occurrences(plain_text, db_string);
+                    
+                    // Используем существующий метод сохранения
+                    db_.save_word_url(word_id, url, html, count);
+                    LOG("Saved URL: " + url + " (count: " + std::to_string(count) + ")");
+                } });
+        }
+        catch (const std::exception &e)
+        {
+            LOG("DB save error: " + std::string(e.what()));
+        }
+    }
+
+    void monitor_new_words()
+    {
+        LOG("Starting word monitoring");
+        int last_processed_id = db_.get_max_word_id();
+        LOG("Last processed ID: " + std::to_string(last_processed_id));
+
+        while (running_)
+        {
+            try
+            {
+                auto new_words = db_.get_new_words_since(last_processed_id);
+                LOG("Found " + std::to_string(new_words.size()) + " new words");
+
+                if (!new_words.empty())
+                {
+                    for (const auto &[word_id, word] : new_words)
+                    {
+                        LOG("Scheduling word: " + word);
+                        net::post(pool_, [this, word]()
+                                  {
+                            LOG("Processing word in thread: " + word);
+                            process_word(word); });
+                    }
+                    last_processed_id = db_.get_max_word_id();
+                    LOG("Updated last processed ID: " + std::to_string(last_processed_id));
+                }
+                std::this_thread::sleep_for(config_.poll_interval);
+            }
+            catch (const std::exception &e)
+            {
+                LOG("Monitoring error: " + std::string(e.what()));
+                std::this_thread::sleep_for(config_.poll_interval * 2);
+            }
+        }
+        LOG("Monitoring loop exited");
+    }
+
+    DownloadResult download_page(const std::string &url, int redirect_count = 0)
+    {
+        LOG("Downloading: " + url + " (redirect: " + std::to_string(redirect_count) + ")");
+
+        DownloadResult result;
+        result.final_url = url;
+
+        if (redirect_count > config_.max_redirects)
+        {
+            LOG("Too many redirects for URL: " + url);
+            result.ec = boost::system::error_code(boost::system::errc::too_many_links,
+                                                  boost::system::system_category());
+            return result;
+        }
+
+        try
+        {
             net::io_context ioc;
-            ssl::context ctx(ssl::context::tlsv12_client);
-            ctx.set_default_verify_paths();
-            ctx.set_verify_mode(ssl::verify_none);
+            tcp::resolver resolver(ioc);
+
+            size_t protocol_pos = url.find("://");
+            if (protocol_pos == std::string::npos)
+            {
+                throw std::runtime_error("Invalid URL format");
+            }
+
+            std::string protocol = url.substr(0, protocol_pos);
+            std::string host_path = url.substr(protocol_pos + 3);
+            size_t path_pos = host_path.find('/');
+            std::string host = host_path.substr(0, path_pos);
+            std::string path = (path_pos == std::string::npos) ? "/" : host_path.substr(path_pos);
+
+            LOG("Resolving: " + host);
+            auto const results = resolver.resolve(host, protocol);
+            LOG("Resolved " + host);
 
             if (protocol == "https")
             {
-                beast::ssl_stream<beast::tcp_stream> stream(ioc, ctx);
+                beast::ssl_stream<beast::tcp_stream> stream(ioc, ssl_ctx_);
 
                 if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()))
                 {
@@ -609,58 +588,270 @@ DownloadResult follow_redirects(const std::string &initial_url, int max_redirect
                                           net::error::get_ssl_category()));
                 }
 
-                auto const results = net::ip::tcp::resolver(ioc).resolve(host, port);
+                LOG("Connecting to: " + host);
                 beast::get_lowest_layer(stream).connect(results);
+                LOG("SSL handshake...");
                 stream.handshake(ssl::stream_base::client);
 
-                http::request<http::string_body> req{http::verb::get, target, 11};
+                http::request<http::string_body> req{http::verb::get, path, 11};
                 req.set(http::field::host, host);
-                req.set(http::field::user_agent, "Mozilla/5.0");
+                req.set(http::field::user_agent, "Mozilla/5.0 (compatible; CrawlerBot/1.0)");
                 req.set(http::field::accept, "text/html");
 
+                LOG("Sending request to: " + url);
                 http::write(stream, req);
 
                 beast::flat_buffer buffer;
                 http::response<http::dynamic_body> res;
+                LOG("Reading response...");
                 http::read(stream, buffer, res);
-                if (res.result() == http::status::bad_request)
-                {
-                    throw std::runtime_error("400 Bad Request");
-                }
+                LOG("Response status: " + std::to_string(res.result_int()));
+
                 if (res.result() == http::status::moved_permanently ||
-                    res.result() == http::status::found)
+                    res.result() == http::status::found ||
+                    res.result() == http::status::see_other)
                 {
+
                     auto location = res.find(http::field::location);
                     if (location != res.end())
                     {
-                        current_url = location->value();
-                        continue;
+                        std::string new_url = HtmlParser::normalize_url(
+                            std::string(location->value()), url);
+
+                        if (!new_url.empty())
+                        {
+                            LOG("Redirecting to: " + new_url);
+                            return download_page(new_url, redirect_count + 1);
+                        }
                     }
                 }
 
                 result.html = beast::buffers_to_string(res.body().data());
-                result.final_url = current_url;
-                break;
+                LOG("Downloaded " + std::to_string(result.html.size()) + " bytes");
+
+                beast::error_code ec;
+                stream.shutdown(ec);
+                if (ec == net::error::eof)
+                {
+                    ec = {};
+                }
+                if (ec)
+                {
+                    LOG("SSL shutdown error: " + ec.message());
+                }
+            }
+            else
+            {
+                beast::tcp_stream stream(ioc);
+                LOG("Connecting to: " + host);
+                stream.connect(results);
+
+                http::request<http::string_body> req{http::verb::get, path, 11};
+                req.set(http::field::host, host);
+                req.set(http::field::user_agent, "Mozilla/5.0 (compatible; CrawlerBot/1.0)");
+                req.set(http::field::accept, "text/html");
+
+                LOG("Sending request to: " + url);
+                http::write(stream, req);
+
+                beast::flat_buffer buffer;
+                http::response<http::dynamic_body> res;
+                LOG("Reading response...");
+                http::read(stream, buffer, res);
+                LOG("Response status: " + std::to_string(res.result_int()));
+
+                if (res.result() == http::status::moved_permanently ||
+                    res.result() == http::status::found ||
+                    res.result() == http::status::see_other)
+                {
+
+                    auto location = res.find(http::field::location);
+                    if (location != res.end())
+                    {
+                        std::string new_url = HtmlParser::normalize_url(
+                            std::string(location->value()), url);
+
+                        if (!new_url.empty())
+                        {
+                            LOG("Redirecting to: " + new_url);
+                            return download_page(new_url, redirect_count + 1);
+                        }
+                    }
+                }
+
+                result.html = beast::buffers_to_string(res.body().data());
+                LOG("Downloaded " + std::to_string(result.html.size()) + " bytes");
+
+                beast::error_code ec;
+                stream.socket().shutdown(tcp::socket::shutdown_both, ec);
+                if (ec == net::error::not_connected)
+                {
+                    ec = {};
+                }
+                if (ec)
+                {
+                    LOG("TCP shutdown error: " + ec.message());
+                }
             }
         }
         catch (const std::exception &e)
         {
-            std::cerr << "Ошибка при обработке URL " << current_url << ": " << e.what() << std::endl;
-            std::cerr << "Error following redirects for " << initial_url << ": " << e.what() << std::endl;
-            result.html.clear();
-            break;
+            LOG("Download exception: " + std::string(e.what()) + " for URL: " + url);
+            result.ec = boost::system::error_code(1, boost::system::system_category());
         }
+        return result;
     }
 
-    return result;
+    std::string get_host(const std::string &url)
+    {
+        size_t protocol_pos = url.find("://");
+        if (protocol_pos == std::string::npos)
+        {
+            return "";
+        }
+        size_t host_start = protocol_pos + 3;
+        size_t host_end = url.find('/', host_start);
+        if (host_end == std::string::npos)
+        {
+            host_end = url.length();
+        }
+        return url.substr(host_start, host_end - host_start);
+    }
+
+    std::string extract_plain_text(const std::string &html)
+    {
+        GumboOutput *output = gumbo_parse(html.c_str());
+        if (!output)
+        {
+            LOG("Gumbo parse failed for text extraction");
+            return "";
+        }
+
+        std::string text = extract_text(output->root);
+        gumbo_destroy_output(&kGumboDefaultOptions, output);
+        return text;
+    }
+
+    static std::string extract_text(GumboNode *node)
+    {
+        if (node->type == GUMBO_NODE_TEXT)
+        {
+            return std::string(node->v.text.text);
+        }
+        else if (node->type == GUMBO_NODE_ELEMENT)
+        {
+            if (node->v.element.tag == GUMBO_TAG_SCRIPT ||
+                node->v.element.tag == GUMBO_TAG_STYLE)
+            {
+                return "";
+            }
+
+            std::string text;
+            GumboVector *children = &node->v.element.children;
+            for (unsigned int i = 0; i < children->length; ++i)
+            {
+                text += extract_text(static_cast<GumboNode *>(children->data[i]));
+            }
+            return text;
+        }
+        return "";
+    }
+
+    int count_word_occurrences(const std::string &content, const std::string &words_str)
+    {
+        if (content.empty() || words_str.empty())
+            return 0;
+
+        int total_count = 0;
+        std::string lower_content = boost::algorithm::to_lower_copy(content);
+
+        // Разбиваем строку слов на отдельные слова
+        boost::char_separator<char> sep(" ");
+        boost::tokenizer<boost::char_separator<char>> tokens(words_str, sep);
+
+        for (const auto &word : tokens)
+        {
+            if (word.empty())
+                continue;
+
+            std::string lower_word = boost::algorithm::to_lower_copy(word);
+            int count = 0;
+            size_t pos = 0;
+
+            while ((pos = lower_content.find(lower_word, pos)) != std::string::npos)
+            {
+                count++;
+                pos += lower_word.length();
+            }
+
+            total_count += count;
+        }
+
+        return total_count;
+    }
+
+    bool check_content(const std::string &content, const std::string &words_str)
+    {
+        if (words_str.empty())
+            return false;
+
+        std::string text = extract_plain_text(content);
+        if (text.empty())
+            return false;
+
+        std::string lower_text = boost::algorithm::to_lower_copy(text);
+
+        // Разбиваем строку слов на отдельные слова
+        boost::char_separator<char> sep(" ");
+        boost::tokenizer<boost::char_separator<char>> tokens(words_str, sep);
+
+        for (const auto &word : tokens)
+        {
+            if (word.empty())
+                continue;
+
+            std::string lower_word = boost::algorithm::to_lower_copy(word);
+            if (lower_text.find(lower_word) != std::string::npos)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+};
+
+void signal_handler(int signal)
+{
+    LOG("Interrupt signal (" + std::to_string(signal) + ") received");
+    exit(signal);
 }
+
 int main(int argc, char *argv[])
 {
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    std::set_terminate([]()
+                       {
+        LOG("Terminate called!");
+        if (auto exc = std::current_exception()) {
+            try {
+                std::rethrow_exception(exc);
+            } catch (const std::exception& e) {
+                LOG("Uncaught exception: " + std::string(e.what()));
+            } catch (...) {
+                LOG("Unknown exception");
+            }
+        }
+        LOG("Aborting...");
+        std::abort(); });
+
     bool force_restart = false;
     if (argc > 1 && std::string(argv[1]) == "--force")
     {
         force_restart = true;
-        std::cout << "Режим принудительного перезапуска поиска\n";
+        LOG("Force restart mode enabled");
     }
 
     SetConsoleOutputCP(CP_UTF8);
@@ -668,38 +859,59 @@ int main(int argc, char *argv[])
 
     try
     {
+        LOG("Initializing database...");
         DBuse db("localhost", "HTTP", "test_postgres", "12345678");
+
+        LOG("Creating tables...");
         db.create_tables();
 
-        auto initial_words = db.get_all_words();
-        {
-            std::lock_guard<std::mutex> lock(data_mutex);
-            int max_id = db.get_max_word_id();
-            processed_word_ids.insert(max_id);
+        LOG("Initializing crawler...");
+        CrawlerConfig config;
+        Crawler crawler(db, config);
 
-            for (const auto &word : initial_words)
+        LOG("Starting crawler...");
+        crawler.start();
+
+        auto initial_words = db.get_all_words();
+        LOG("Found " + std::to_string(initial_words.size()) + " initial words");
+
+        for (const auto &word : initial_words)
+        {
+            int word_id = db.get_word_id(word);
+            if (word_id != -1)
             {
-                int word_id = db.get_word_id(word);
-                if (word_id != -1 && (force_restart || !db.url_exists_for_word(word_id,
-                                                                               "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word))))
+                std::string wiki_url = "https://ru.wiktionary.org/wiki/" + crawler.prepare_wiki_url(word);
+                if (force_restart || !db.url_exists_for_word(word_id, wiki_url))
                 {
-                    process_word(db, word);
+                    LOG("Scheduling initial word: " + word);
+                    net::post(crawler.get_pool(), [&crawler, word]()
+                              { crawler.process_word(word); });
+                }
+                else
+                {
+                    LOG("Skipping already processed word: " + word);
                 }
             }
         }
 
-        std::thread monitor_thread(monitor_new_words, std::ref(db));
-        std::cout << "Мониторинг новых слов запущен. Нажмите Enter для выхода...\n";
+        LOG("Crawler started. Press Enter to exit...");
         std::cin.get();
-        keep_running = false;
-        monitor_thread.join();
+
+        LOG("Stopping crawler...");
+        crawler.stop();
+        LOG("Crawler stopped");
     }
     catch (const std::exception &e)
     {
-        std::cerr << "Ошибка: " << e.what() << std::endl;
-        keep_running = false;
+        LOG("Fatal error: " + std::string(e.what()));
         return 1;
     }
+    catch (...)
+    {
+        LOG("Unknown fatal error");
+        return 2;
+    }
 
+    LOG("Application exited normally");
     return 0;
 }

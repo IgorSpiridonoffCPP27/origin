@@ -1,21 +1,15 @@
 #include "pch.h"
 #include "DBusers.h"
+#include <boost/asio/ssl.hpp>
+#include <atomic>
+#include <thread>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
-std::string get_query_param(const std::string& target, const std::string& param) {
-    size_t param_pos = target.find(param + "=");
-    if (param_pos == std::string::npos) return "";
-    param_pos += param.length() + 1;
-    size_t end_pos = target.find("&", param_pos);
-    if (end_pos == std::string::npos) end_pos = target.length();
-    return target.substr(param_pos, end_pos - param_pos);
-}
-
-// В handle_request добавим обработку новых запросов
+// Перенесено объявление функции перед main
 void handle_request(DBuse& db, http::request<http::string_body>& req, http::response<http::string_body>& res) {
     res.set(http::field::content_type, "application/json; charset=utf-8");
     
@@ -85,6 +79,7 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
         }.dump();
     }
 }
+
 int main() {
     try {
         SetConsoleOutputCP(CP_UTF8);
@@ -120,11 +115,12 @@ int main() {
                     http::read(socket, buffer, req);
 
                     http::response<http::string_body> res;
-                    handle_request(db, req, res);
+                    handle_request(db, req, res); // Теперь функция видна
                     res.prepare_payload();
 
                     http::write(socket, res);
-                    socket.shutdown(tcp::socket::shutdown_send);
+                    beast::error_code ec;
+                    socket.shutdown(tcp::socket::shutdown_send, ec);
                 } catch (const std::exception& e) {
                     std::cerr << "Ошибка при обработке запроса: " << e.what() << std::endl;
                 }

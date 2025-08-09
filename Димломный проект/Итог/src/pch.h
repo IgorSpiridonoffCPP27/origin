@@ -4,13 +4,8 @@
 #include <memory>
 #include <iostream>
 #include <cstdlib>
-
-
 #include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
-
-
-
 #include <string>
 #include <vector>
 #include <boost/beast/core.hpp>
@@ -37,3 +32,7 @@
 #include <unordered_set>
 #include <boost/regex.hpp> // Добавляем в начале файла
 #include <boost/algorithm/string.hpp>
+#include <sw/redis++/redis++.h>
+#include <boost/asio/spawn.hpp>
+#include <tuple>      
+#include <functional>
