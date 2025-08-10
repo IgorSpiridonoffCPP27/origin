@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DBusers.h"
+
 #include <boost/asio/ssl.hpp>
 #include <atomic>
 #include <thread>
@@ -81,6 +82,8 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
 }
 
 int main() {
+    ConfigParser config;
+    
     try {
         SetConsoleOutputCP(CP_UTF8);
         SetConsoleCP(CP_UTF8);
@@ -90,7 +93,7 @@ int main() {
         try {
             // Инициализация базы данных с подробным выводом
             std::cout << "Попытка подключения к базе данных..." << std::endl;
-            DBuse db("localhost", "HTTP", "test_postgres", "12345678");
+            DBuse db(config.get("Database.host"), config.get("Database.dbname"), config.get("Database.user"), config.get("Database.password"));
             
             std::cout << "Подключение к базе данных успешно." << std::endl;
             
@@ -101,8 +104,9 @@ int main() {
             std::cout << "Структура базы данных проверена." << std::endl;
 
             net::io_context ioc;
-            tcp::acceptor acceptor(ioc, {tcp::v4(), 8080});
-            std::cout << "Сервер запущен на порту 8080" << std::endl;
+            unsigned short port = config.get_int("server.port");
+            tcp::acceptor acceptor(ioc, {tcp::v4(), port});
+            std::cout << "Сервер запущен на порту "+config.get("server.port") << std::endl;
             std::cout << "Ожидание подключений..." << std::endl;
 
             while (true) {

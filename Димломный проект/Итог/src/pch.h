@@ -14,6 +14,7 @@
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/error.hpp>
+#define _WIN32_WINNT 0x0A00  // Windows 10
 #include <windows.h>
 #include <shellapi.h>
 #include <fstream>
@@ -36,3 +37,4 @@
 #include <boost/asio/spawn.hpp>
 #include <tuple>      
 #include <functional>
+#include "config_parser.h"

@@ -60,13 +60,22 @@ namespace ssl = net::ssl;
 using tcp = net::ip::tcp;
 
 // Конфигурация краулера
-struct CrawlerConfig
-{
-    int max_redirects = 5;
-    int recursion_depth = 2;
-    int max_connections = 10;
-    int max_links_per_page = 3;
-    std::chrono::seconds poll_interval{5};
+struct CrawlerConfig : public ConfigParser {
+    int max_redirects;
+    int recursion_depth;
+    int max_connections;
+    int max_links_per_page;
+    std::chrono::seconds poll_interval;
+
+    CrawlerConfig(const std::string& filename = "../../config.ini") 
+        : ConfigParser(filename) 
+    {
+        max_redirects = get_int("Crowler.max_redirects");
+        recursion_depth = get_int("Crowler.recursion_depth");
+        max_connections = get_int("Crowler.max_connections");
+        max_links_per_page = get_int("Crowler.max_links_per_page");
+        poll_interval = std::chrono::seconds(get_int("Crowler.poll_interval"));
+    }
 };
 
 class ThreadSafeSet
@@ -298,9 +307,8 @@ public:
                                        { txn.exec_params(
                                              "UPDATE words SET status = 'processing' WHERE id = $1",
                                              word_id); });
-
             std::vector<std::pair<std::string, std::string>> url_templates = {
-                {"Wiktionary", "https://ru.wiktionary.org/wiki/" + prepare_wiki_url(word)},
+                {"Wiktionary", config_.get("Crowler.start_page") + prepare_wiki_url(word)},
                 {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
 
             bool processed = false;
@@ -831,7 +839,7 @@ int main(int argc, char *argv[])
 {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-
+    
     std::set_terminate([]()
                        {
         LOG("Terminate called!");
@@ -859,15 +867,17 @@ int main(int argc, char *argv[])
 
     try
     {
+        CrawlerConfig crawler_config;
         LOG("Initializing database...");
-        DBuse db("localhost", "HTTP", "test_postgres", "12345678");
+        DBuse db(crawler_config.get("Database.host"), crawler_config.get("Database.dbname"), crawler_config.get("Database.user"), crawler_config.get("Database.password"));
 
         LOG("Creating tables...");
         db.create_tables();
 
         LOG("Initializing crawler...");
-        CrawlerConfig config;
-        Crawler crawler(db, config);
+        
+        
+        Crawler crawler(db, crawler_config);
 
         LOG("Starting crawler...");
         crawler.start();
@@ -880,7 +890,7 @@ int main(int argc, char *argv[])
             int word_id = db.get_word_id(word);
             if (word_id != -1)
             {
-                std::string wiki_url = "https://ru.wiktionary.org/wiki/" + crawler.prepare_wiki_url(word);
+                std::string wiki_url = crawler_config.get("Crowler.start_page") + crawler.prepare_wiki_url(word);
                 if (force_restart || !db.url_exists_for_word(word_id, wiki_url))
                 {
                     LOG("Scheduling initial word: " + word);

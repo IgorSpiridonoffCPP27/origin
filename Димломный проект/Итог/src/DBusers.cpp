@@ -1,12 +1,14 @@
 #include "DBusers.h"
 #include <boost/algorithm/string.hpp>
 #include <stdexcept>
-const int POOL_SIZE = 5;
+
 DBuse::DBuse(const std::string& host, 
              const std::string& dbname,
              const std::string& user,
              const std::string& password) 
     : conn_details{host, dbname, user, password} {
+        ConfigParser config;
+    const int POOL_SIZE = config.get_int("DBusers.POOL_SIZE");
         // Инициализация пула соединений
     for (int i = 0; i < POOL_SIZE; ++i) {
         auto wrapper = std::make_shared<ConnectionWrapper>();

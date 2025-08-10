@@ -11,14 +11,26 @@ namespace ssl = net::ssl;
 using tcp = net::ip::tcp;
 
 // Конфигурация прокси-сервера
-struct ProxyConfig {
-    unsigned short http_port = 8081;
-    unsigned short https_port = 8444;
-    std::string cert_file = "proxy.crt";
-    std::string key_file = "proxy.key";
-    std::string api_host = "localhost";
-    std::string api_port = "8080";
-    int thread_pool_size = 4;
+struct ProxyConfig : public ConfigParser {
+    unsigned short http_port;
+    unsigned short https_port;
+    std::string cert_file;
+    std::string key_file;
+    std::string api_host;
+    std::string api_port;
+    int thread_pool_size;
+
+    ProxyConfig(const std::string& filename = "../../config.ini") 
+        : ConfigParser(filename) 
+    {
+        http_port = get_int("web_proxy.http_port");
+        https_port = get_int("web_proxy.https_port");
+        cert_file = get("web_proxy.cert_file");
+        key_file = get("web_proxy.key_file");
+        api_host = get("web_proxy.api_host");
+        api_port = get("web_proxy.api_port");
+        thread_pool_size = get_int("web_proxy.thread_pool_size");
+    }
 };
 
 // Глобальный флаг для контроля работы прокси
