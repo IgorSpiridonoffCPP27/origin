@@ -26,8 +26,10 @@ find_package(libpqxx REQUIRED)
 # Ищем nlohmann_json
 find_package(nlohmann_json CONFIG REQUIRED)
 
+# Добавляем путь для поиска заголовков
+include_directories(include)
+
 # Ручной поиск Gumbo
-# Замените базовый путь на ваш
 set(VCPKG_BASE_DIR "D:/vcpkg/installed/x64-windows")
 
 find_path(GUMBO_INCLUDE_DIR NAMES gumbo.h
@@ -61,10 +63,16 @@ target_link_libraries(gumbo INTERFACE
     $<$<NOT:$<CONFIG:Debug>>:${GUMBO_LIBRARY_RELEASE}>
 )
 
-# crowler
+# crowler - обновленный список файлов
 add_executable(crowler 
     src/crowler.cpp
+    src/crawler.cpp
+    src/crawler_config.cpp
     src/DBusers.cpp
+    src/logger.cpp
+    src/html_parser.cpp
+    src/threadsafe_set.cpp
+    src/url_tools.cpp
 )
 target_link_libraries(crowler PRIVATE 
     Boost::boost
@@ -78,9 +86,10 @@ target_link_libraries(crowler PRIVATE
     crypt32
     libpqxx::pqxx
     gumbo
+    nlohmann_json::nlohmann_json  # Добавлено, если используется JSON
 )
 
-# Клиент1
+# Клиент1 (без изменений)
 add_executable(client src/client.cpp)
 target_link_libraries(client PRIVATE 
     Boost::boost
@@ -95,12 +104,11 @@ target_link_libraries(client PRIVATE
     libpqxx::pqxx
 )
 
-# Сервер1
+# Сервер1 (без изменений)
 add_executable(server
     src/server.cpp 
     src/DBusers.cpp
 )
-
 target_link_libraries(server PRIVATE 
     Boost::boost
     Boost::system 
@@ -114,12 +122,13 @@ target_link_libraries(server PRIVATE
     libpqxx::pqxx
 )
 
-# Веб Сервер
+# Веб Сервер (без изменений)
 add_executable(web_server
     src/web_proxy.cpp 
-    src/DBusers.cpp
+    src/api_client.cpp
+    src/proxy_config.cpp
+    src/html_generator.cpp
 )
-
 target_link_libraries(web_server PRIVATE 
     Boost::boost
     Boost::system 

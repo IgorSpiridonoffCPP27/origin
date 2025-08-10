@@ -1,6 +1,5 @@
 #include "pch.h"
 #include "DBusers.h"
-
 #include <boost/asio/ssl.hpp>
 #include <atomic>
 #include <thread>
