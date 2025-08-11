@@ -36,10 +36,11 @@ public:
                          const std::string& value);
     json::json process_word_request(const std::string& word);
     json::json check_word_status(int word_id);
-    bool save_word_url(int word_id, 
-                      const std::string& url, 
-                      const std::string& html_content, 
-                      int word_count);
+    bool save_word_url(int word_id,
+                          const std::string &url,
+                          const std::string &html_content,
+                          const std::string &text_content,
+                          int word_count);
     
     // Utility methods
     void create_tables();

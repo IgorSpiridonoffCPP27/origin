@@ -278,7 +278,7 @@ void Crawler::save_pages(const std::string &word,
                     int count = count_word_occurrences(plain_text, db_string);
                     
                     // Используем существующий метод сохранения
-                    db_.save_word_url(word_id, url, html, count);
+                    db_.save_word_url(word_id, url, html, plain_text, count);
                     LOG("Saved URL: " + url + " (count: " + std::to_string(count) + ")");
                 } });
     }

@@ -239,25 +239,27 @@ std::string generate_html() {
                 resultsContainer.innerHTML = '';
                 return;
             }
-            
+
             // Очищаем статус
             statusMessage.innerHTML = '';
-            
+
             // Формируем HTML с результатами
             let html = `
                 <div class="results-container">
                     <h2>Результаты для "${escapeHtml(query)}":</h2>
             `;
-            
+
             results.forEach(item => {
-                const url = escapeHtml(item.url || '');
+                // ДЕКОДИРУЕМ URL ПЕРЕД ОТОБРАЖЕНИЕМ
+                const decodedUrl = decodeURIComponent(item.url || '');
+                const escapedUrl = escapeHtml(decodedUrl);  // Экранируем для безопасности
                 const count = item.count || 0;
-                const snippet = truncate(escapeHtml(item.content || ''), 200);
+                const snippet = escapeHtml(item.content || '');
                 
                 html += `
                     <div class="result-item">
-                        <a href="${url}" class="result-url" target="_blank" rel="noopener noreferrer">
-                            ${url}
+                        <a href="${escapedUrl}" class="result-url" target="_blank" rel="noopener noreferrer">
+                            ${escapedUrl}
                         </a>
                         <div class="result-meta">Найдено ${count} раз</div>
                         <div class="result-snippet">${snippet}</div>
