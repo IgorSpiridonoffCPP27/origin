@@ -179,8 +179,14 @@ std::string generate_html() {
                 const data = await response.json();
                 
                 if (data.status === 'completed') {
-                    // Показываем результаты
-                    displayResults(query, data.urls || []);
+                    // Убираем статус после получения результатов
+                    showStatus('', 'pending');
+                    
+                    if (data.urls && Array.isArray(data.urls) && data.urls.length > 0) {
+                        displayResults(data.urls);
+                    } else {
+                        showStatus(`По запросу "${query}" ничего не найдено`, 'pending');
+                    }
                 } else {
                     // Начинаем опрос статуса
                     pollStatus(data.word_id, query);
@@ -192,6 +198,11 @@ std::string generate_html() {
         
         // Функция для отображения статуса
         function showStatus(message, type = 'pending') {
+            if (!message) {
+                statusMessage.innerHTML = '';
+                return;
+            }
+            
             statusMessage.innerHTML = `
                 <div class="status-message ${type}">
                     ${type === 'processing' ? '<div class="spinner">↻</div>' : ''}
@@ -214,9 +225,14 @@ std::string generate_html() {
                     
                     const data = await response.json();
                     
+                    // Отображаем текущие результаты
+                    if (data.urls && Array.isArray(data.urls)) {
+                        displayResults(data.urls);
+                    }
+                    
                     if (data.status === 'completed') {
-                        // Показываем результаты
-                        displayResults(query, data.urls || []);
+                        // Убираем статус после завершения обработки
+                        showStatus('', 'pending');
                     } else if (data.status === 'error') {
                         showStatus('Произошла ошибка при обработке запроса', 'error');
                     } else {
@@ -233,42 +249,54 @@ std::string generate_html() {
         }
         
         // Функция для отображения результатов
-        function displayResults(query, results) {
-            if (results.length === 0) {
-                showStatus(`По запросу "${query}" ничего не найдено`, 'pending');
-                resultsContainer.innerHTML = '';
+        function displayResults(results) {
+            // Убедимся, что results - это массив
+            if (!Array.isArray(results)) {
+                console.error("Results is not an array:", results);
                 return;
             }
-
-            // Очищаем статус
-            statusMessage.innerHTML = '';
-
+            
+            if (results.length === 0) {
+                return; // Не очищаем контейнер, если результатов нет
+            }
+            
             // Формируем HTML с результатами
-            let html = `
-                <div class="results-container">
-                    <h2>Результаты для "${escapeHtml(query)}":</h2>
-            `;
-
+            let html = '';
+            
             results.forEach(item => {
-                // ДЕКОДИРУЕМ URL ПЕРЕД ОТОБРАЖЕНИЕМ
                 const decodedUrl = decodeURIComponent(item.url || '');
-                const escapedUrl = escapeHtml(decodedUrl);  // Экранируем для безопасности
+                const escapedUrl = escapeHtml(decodedUrl);
                 const count = item.count || 0;
-                const snippet = escapeHtml(item.content || '');
+                const snippet = truncate(escapeHtml(item.content || ''), 200);
                 
-                html += `
-                    <div class="result-item">
-                        <a href="${escapedUrl}" class="result-url" target="_blank" rel="noopener noreferrer">
-                            ${escapedUrl}
-                        </a>
-                        <div class="result-meta">Найдено ${count} раз</div>
-                        <div class="result-snippet">${snippet}</div>
-                    </div>
-                `;
+                // Проверяем, есть ли уже этот результат на странице
+                if (!document.querySelector(`.result-item a[href="${escapedUrl}"]`)) {
+                    html += `
+                        <div class="result-item">
+                            <a href="${escapedUrl}" class="result-url" target="_blank" rel="noopener noreferrer">
+                                ${escapedUrl}
+                            </a>
+                            <div class="result-meta">Найдено ${count} раз</div>
+                            <div class="result-snippet">${snippet}</div>
+                        </div>
+                    `;
+                }
             });
             
-            html += `</div>`;
-            resultsContainer.innerHTML = html;
+            // Добавляем новые результаты в контейнер
+            if (html) {
+                // Убрали заголовок "Частичные результаты"
+                if (resultsContainer.children.length === 0) {
+                    resultsContainer.innerHTML = `
+                        <div class="results-container">
+                            ${html}
+                        </div>
+                    `;
+                } else {
+                    const container = resultsContainer.querySelector('.results-container');
+                    container.innerHTML += html;
+                }
+            }
         }
         
         // Вспомогательные функции

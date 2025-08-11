@@ -302,22 +302,28 @@ void DBuse::create_tables()
             "UNIQUE(word_id, url))"); });
 }
 
-bool DBuse::save_word_url(int word_id,
-                          const std::string &url,
-                          const std::string &html_content,
-                          const std::string &text_content,
-                          int word_count)
-{
+bool DBuse::save_word_url(int word_id, 
+                         const std::string& url, 
+                         const std::string& html_content,
+                         const std::string& text_content,
+                         int word_count) {
     bool saved = false;
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
-        // В реализации
-txn.exec_params(
-    "INSERT INTO word_urls (word_id, url, html_content, text_content, word_count) "
-    "VALUES ($1, $2, $3, $4, $5) "
-    "ON CONFLICT (word_id, url) DO NOTHING",
-    word_id, url, html_content, text_content, word_count);
-        saved = true; });
+    execute_in_transaction([&](pqxx::work& txn) {
+        txn.exec_params(
+            "INSERT INTO word_urls (word_id, url, html_content, text_content, word_count) "
+            "VALUES ($1, $2, $3, $4, $5) "
+            "ON CONFLICT (word_id, url) DO UPDATE "
+            "SET html_content = EXCLUDED.html_content, "
+            "    text_content = EXCLUDED.text_content, "
+            "    word_count = EXCLUDED.word_count",
+            word_id, url, html_content, text_content, word_count);
+        saved = true;
+        
+        // Обновляем время последнего изменения для отслеживания прогресса
+        txn.exec_params(
+            "UPDATE words SET processed_at = CURRENT_TIMESTAMP WHERE id = $1",
+            word_id);
+    });
     return saved;
 }
 
@@ -502,12 +508,10 @@ json::json DBuse::process_word_request(const std::string &word)
     return response;
 }
 
-json::json DBuse::check_word_status(int word_id)
-{
+json::json DBuse::check_word_status(int word_id) {
     json::json response;
-
-    execute_in_transaction([&](pqxx::work &txn)
-                           {
+    
+    execute_in_transaction([&](pqxx::work& txn) {
         auto result = txn.exec_params(
             "SELECT status FROM words WHERE id = $1",
             word_id);
@@ -516,26 +520,27 @@ json::json DBuse::check_word_status(int word_id)
             std::string status = result[0][0].as<std::string>();
             response["status"] = status;
             
-            if (status == "completed") {
-                pqxx::result urls_result = txn.exec_params(
-    "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls "
-    "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
-    word_id);
-                
-                json::json urls_json;
-                for (auto row : urls_result) {
-                    urls_json.push_back({
-                        {"url", row["url"].as<std::string>()},
-                        {"count", row["word_count"].as<int>()},
-                        {"content", row["snippet"].as<std::string>()}
-                    });
-                }
-                response["urls"] = urls_json;
+            // Всегда возвращаем текущие результаты, даже если обработка не завершена
+            pqxx::result urls_result = txn.exec_params(
+                "SELECT url, text_content, word_count FROM word_urls "
+                "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
+                word_id);
+            
+            json::json urls_json;
+            for (auto row : urls_result) {
+                urls_json.push_back({
+                    {"url", row["url"].as<std::string>()},
+                    {"count", row["word_count"].as<int>()},
+                    {"content", row["text_content"].as<std::string>()}
+                });
             }
+            
+            response["urls"] = urls_json;
         } else {
             throw std::runtime_error("Word not found");
-        } });
-
+        }
+    });
+    
     return response;
 }
 
