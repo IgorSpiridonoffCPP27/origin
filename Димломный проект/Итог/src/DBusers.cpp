@@ -301,6 +301,33 @@ void DBuse::create_tables()
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
             "UNIQUE(word_id, url))"); });
 }
+void DBuse::run_migrations() {
+    execute_in_transaction([&](pqxx::work& txn) {
+        try {
+            // Проверяем существование колонки text_content
+            auto res = txn.exec(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'word_urls' AND column_name = 'text_content'"
+            );
+            
+            if (res.empty()) {
+                               
+                // Добавляем новую колонку для текстового контента
+                txn.exec("ALTER TABLE word_urls ADD COLUMN text_content TEXT");
+                
+                // Обновляем существующие записи
+                txn.exec(
+                    "UPDATE word_urls "
+                    "SET text_content = substring(html_content from 1 for 10000)"
+                );
+                
+                
+            }
+        } catch (const std::exception& e) {
+            throw;
+        }
+    });
+}
 
 bool DBuse::save_word_url(int word_id, 
                          const std::string& url, 

@@ -99,6 +99,8 @@ int main() {
             // Создание таблиц (если нужно)
             std::cout << "Проверка структуры базы данных..." << std::endl;
             db.create_tables();
+            // ВЫПОЛНЯЕМ МИГРАЦИИ ПЕРЕД ДОБАВЛЕНИЕМ ОГРАНИЧЕНИЙ
+            db.run_migrations();
             db.add_unique_constraint();
             std::cout << "Структура базы данных проверена." << std::endl;
 

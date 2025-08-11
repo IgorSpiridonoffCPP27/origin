@@ -89,20 +89,6 @@ target_link_libraries(crowler PRIVATE
     nlohmann_json::nlohmann_json  # Добавлено, если используется JSON
 )
 
-# Клиент1 (без изменений)
-add_executable(client src/client.cpp)
-target_link_libraries(client PRIVATE 
-    Boost::boost
-    Boost::system 
-    Boost::coroutine
-    Boost::context
-    Boost::date_time
-    OpenSSL::SSL 
-    OpenSSL::Crypto
-    ws2_32
-    crypt32
-    libpqxx::pqxx
-)
 
 # Сервер1 (без изменений)
 add_executable(server

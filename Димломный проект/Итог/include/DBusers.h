@@ -52,7 +52,7 @@ public:
     std::vector<std::string> get_all_words();
     std::vector<std::pair<int, std::string>> get_new_words_since(int last_id);
     int get_max_word_id();
-
+    void run_migrations();
 private:
     struct ConnectionDetails {
         std::string host;
