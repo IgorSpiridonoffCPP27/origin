@@ -3,7 +3,7 @@
 #include "url_tools.h"
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string.hpp> // Для to_lower_copy
+#include <boost/algorithm/string.hpp> // string split, tokenizer
 #include <boost/tokenizer.hpp>
 Crawler::Crawler(DBuse &db, const CrawlerConfig &config)
     : db_(db), config_(config), pool_(config.max_connections), ssl_ctx_(ssl::context::tlsv12_client)
@@ -20,6 +20,18 @@ Crawler::Crawler(DBuse &db, const CrawlerConfig &config)
         throw;
     }
 }
+// Safe ASCII-only lowercase to avoid CRT ctype assertions on UTF-8 bytes
+static std::string ascii_lower_copy(const std::string& s)
+{
+    std::string r;
+    r.reserve(s.size());
+    for (unsigned char uc : s) {
+        if (uc >= 'A' && uc <= 'Z') r.push_back(static_cast<char>(uc + 32));
+        else r.push_back(static_cast<char>(uc));
+    }
+    return r;
+}
+
 
 // Реализации методов Crawler (process_recursive, save_pages, monitor_new_words, download_page, count_word_occurrences, check_content)
 // [Здесь должна быть полная реализация методов класса Crawler из исходного кода]
@@ -150,6 +162,43 @@ void Crawler::process_word(const std::string &word)
         LOG("Error processing word '" + word + "': " + e.what());
     }
     LOG("Finished processing word: " + word);
+}
+
+void Crawler::crawl_start_url()
+{
+    visited_urls_.clear();
+    try {
+        std::string start_url = config_.get("Crowler.start_page");
+        if (start_url.empty()) {
+            LOG("Start URL is empty in config");
+            return;
+        }
+        auto result = download_page(start_url);
+        if (!result.ec && !result.html.empty()) {
+            std::vector<std::pair<std::string, std::string>> pages = {{result.final_url, result.html}};
+            crawl_recursive(pages, 0);
+        } else {
+            LOG("Failed to download start URL: " + start_url);
+        }
+    } catch (const std::exception& e) {
+        LOG(std::string("crawl_start_url exception: ") + e.what());
+    }
+}
+
+void Crawler::crawl_url(const std::string &url)
+{
+    visited_urls_.clear();
+    try {
+        auto result = download_page(url);
+        if (!result.ec && !result.html.empty()) {
+            std::vector<std::pair<std::string, std::string>> pages = {{result.final_url, result.html}};
+            crawl_recursive(pages, 0);
+        } else {
+            LOG("Failed to download URL: " + url);
+        }
+    } catch (const std::exception& e) {
+        LOG(std::string("crawl_url exception: ") + e.what());
+    }
 }
 
 void Crawler::process_recursive(const std::string &word,
@@ -288,6 +337,126 @@ void Crawler::save_pages(const std::string &word,
     }
 }
 
+// New: crawl recursively without targeting a specific word; index all words
+void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::string>> &pages,
+                              int current_depth)
+{
+    LOG("Crawl (all words) at depth: " + std::to_string(current_depth) +
+        " with " + std::to_string(pages.size()) + " pages");
+
+    if (pages.empty()) return;
+
+    save_pages_all_words(pages);
+
+    if (current_depth >= config_.recursion_depth) {
+        LOG("Max recursion depth reached (all words): " + std::to_string(current_depth));
+        return;
+    }
+
+    std::vector<std::pair<std::string, std::string>> next_level_pages;
+    std::mutex next_level_mutex;
+    std::vector<std::future<void>> futures;
+
+    for (const auto &[url, html] : pages) {
+        futures.emplace_back(
+            boost::asio::post(
+                pool_,
+                std::packaged_task<void()>([&, url, html]() {
+                    auto links = HtmlParser::extract_links(html, url);
+                    LOG("[ALL] Found " + std::to_string(links.size()) + " links at: " + url);
+
+                    std::string current_host = get_host(url);
+                    int links_processed = 0;
+
+                    for (const auto &link : links) {
+                        if (links_processed >= config_.max_links_per_page) break;
+
+                        if (get_host(link) != current_host) {
+                            LOG("[ALL] Skipping external link: " + link);
+                            continue;
+                        }
+
+                        if (visited_urls_.contains(link)) {
+                            LOG("[ALL] Skipping visited URL: " + link);
+                            continue;
+                        }
+
+                        LOG("[ALL] Downloading link: " + link);
+                        auto result = download_page(link);
+                        if (result.ec || result.html.empty()) {
+                            LOG("[ALL] Failed to download link: " + link);
+                            continue;
+                        }
+
+                        visited_urls_.insert(result.final_url);
+
+                        std::lock_guard lock(next_level_mutex);
+                        next_level_pages.emplace_back(result.final_url, result.html);
+                        links_processed++;
+                    }
+                }))
+        );
+    }
+
+    for (auto &future : futures) {
+        future.wait();
+    }
+
+    if (!next_level_pages.empty()) {
+        LOG("[ALL] Found " + std::to_string(next_level_pages.size()) + " pages for next level");
+        crawl_recursive(next_level_pages, current_depth + 1);
+    }
+}
+
+std::unordered_map<std::string, int> Crawler::compute_word_counts(const std::string &text)
+{
+    std::unordered_map<std::string, int> counts;
+    if (text.empty()) return counts;
+
+    // Treat common punctuation and whitespace as separators; keep UTF-8 letters intact
+    static const std::string seps = " \t\n\r.,;:!?()[]{}<>\"'`~@#$%^&*-_=+\\/|\u00A0";
+    boost::char_separator<char> sep(seps.c_str());
+    auto lowered = ascii_lower_copy(text);
+    boost::tokenizer<boost::char_separator<char>> tokens(lowered, sep);
+    for (const auto &tok : tokens) {
+        if (tok.size() < 2) continue; // skip 1-char tokens
+        counts[tok] += 1;
+    }
+    return counts;
+}
+
+bool Crawler::is_word_char(unsigned char c)
+{
+    return std::isalnum(c) != 0;
+}
+
+void Crawler::save_pages_all_words(const std::vector<std::pair<std::string, std::string>> &pages)
+{
+    LOG("[ALL] Saving " + std::to_string(pages.size()) + " pages (all words)");
+    try {
+        for (const auto &pair : pages) {
+            const std::string &url = pair.first;
+            const std::string &html = pair.second;
+            std::string plain_text = HtmlParser::extract_plain_text(html);
+            auto counts = compute_word_counts(plain_text);
+
+            for (const auto &entry : counts) {
+                const std::string &word = entry.first;
+                int count = entry.second;
+
+                // Ensure word exists in words table, then save relation
+                db_.add_word_to_tables(word);
+                int word_id = db_.get_word_id(word);
+                if (word_id == -1) continue;
+                db_.save_word_url(word_id, url, html, plain_text, count);
+            }
+            LOG("[ALL] Indexed page: " + url + " (" + std::to_string(counts.size()) + " words)");
+        }
+    } catch (const std::exception &e) {
+        LOG(std::string("save_pages_all_words error: ") + e.what());
+    }
+}
+
 void Crawler::monitor_new_words()
 {
     LOG("Starting word monitoring");
@@ -356,6 +525,8 @@ Crawler::DownloadResult Crawler::download_page(const std::string &url, int redir
         size_t path_pos = host_path.find('/');
         std::string host = host_path.substr(0, path_pos);
         std::string path = (path_pos == std::string::npos) ? "/" : host_path.substr(path_pos);
+        // Кодируем цель HTTP: оставляем разделители, кодируем не-ASCII
+        std::string http_target = encode_http_target(path);
 
         LOG("Resolving: " + host);
         auto const results = resolver.resolve(host, protocol);
@@ -373,29 +544,40 @@ Crawler::DownloadResult Crawler::download_page(const std::string &url, int redir
             }
 
             LOG("Connecting to: " + host);
+            // Таймауты на сетевые операции
+            beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(15));
             beast::get_lowest_layer(stream).connect(results);
             LOG("SSL handshake...");
+            beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(15));
             stream.handshake(ssl::stream_base::client);
 
-            http::request<http::string_body> req{http::verb::get, path, 11};
+            http::request<http::string_body> req{http::verb::get, http_target, 11};
             req.set(http::field::host, host);
-            req.set(http::field::user_agent, "Mozilla/5.0 (compatible; CrawlerBot/1.0)");
-            req.set(http::field::accept, "text/html");
+            req.set(http::field::user_agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+            req.set(http::field::accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            req.set(http::field::accept_language, "ru,en-US;q=0.9,en;q=0.8");
+            req.set(http::field::accept_encoding, "identity");
+            req.set(http::field::connection, "close");
 
             LOG("Sending request to: " + url);
+            beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(15));
             http::write(stream, req);
 
             beast::flat_buffer buffer;
-            http::response<http::dynamic_body> res;
             LOG("Reading response...");
-            http::read(stream, buffer, res);
+            beast::get_lowest_layer(stream).expires_after(std::chrono::seconds(30));
+            http::response_parser<http::dynamic_body> parser;
+            parser.body_limit(50ull * 1024ull * 1024ull); // 50 MB
+            http::read(stream, buffer, parser);
+            auto res = parser.release();
             LOG("Response status: " + std::to_string(res.result_int()));
 
             if (res.result() == http::status::moved_permanently ||
                 res.result() == http::status::found ||
-                res.result() == http::status::see_other)
+                res.result() == http::status::see_other ||
+                res.result() == http::status::temporary_redirect ||
+                res.result() == http::status::permanent_redirect)
             {
-
                 auto location = res.find(http::field::location);
                 if (location != res.end())
                 {
@@ -414,6 +596,7 @@ Crawler::DownloadResult Crawler::download_page(const std::string &url, int redir
             LOG("Downloaded " + std::to_string(result.html.size()) + " bytes");
 
             beast::error_code ec;
+            // Уберем жесткий shutdown, чтобы не зависать на серверах с некорректным TLS-выходом
             stream.shutdown(ec);
             if (ec == net::error::eof)
             {
@@ -428,27 +611,37 @@ Crawler::DownloadResult Crawler::download_page(const std::string &url, int redir
         {
             beast::tcp_stream stream(ioc);
             LOG("Connecting to: " + host);
+            // Таймауты на сетевые операции
+            stream.expires_after(std::chrono::seconds(15));
             stream.connect(results);
 
-            http::request<http::string_body> req{http::verb::get, path, 11};
+            http::request<http::string_body> req{http::verb::get, http_target, 11};
             req.set(http::field::host, host);
-            req.set(http::field::user_agent, "Mozilla/5.0 (compatible; CrawlerBot/1.0)");
-            req.set(http::field::accept, "text/html");
+            req.set(http::field::user_agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+            req.set(http::field::accept, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            req.set(http::field::accept_language, "ru,en-US;q=0.9,en;q=0.8");
+            req.set(http::field::accept_encoding, "identity");
+            req.set(http::field::connection, "close");
 
             LOG("Sending request to: " + url);
+            stream.expires_after(std::chrono::seconds(15));
             http::write(stream, req);
 
             beast::flat_buffer buffer;
-            http::response<http::dynamic_body> res;
             LOG("Reading response...");
-            http::read(stream, buffer, res);
+            stream.expires_after(std::chrono::seconds(30));
+            http::response_parser<http::dynamic_body> parser;
+            parser.body_limit(50ull * 1024ull * 1024ull); // 50 MB
+            http::read(stream, buffer, parser);
+            auto res = parser.release();
             LOG("Response status: " + std::to_string(res.result_int()));
 
             if (res.result() == http::status::moved_permanently ||
                 res.result() == http::status::found ||
-                res.result() == http::status::see_other)
+                res.result() == http::status::see_other ||
+                res.result() == http::status::temporary_redirect ||
+                res.result() == http::status::permanent_redirect)
             {
-
                 auto location = res.find(http::field::location);
                 if (location != res.end())
                 {
@@ -493,7 +686,7 @@ int Crawler::count_word_occurrences(const std::string &content, const std::strin
         return 0;
 
     int total_count = 0;
-    std::string lower_content = boost::algorithm::to_lower_copy(content);
+    std::string lower_content = ascii_lower_copy(content);
 
     // Разбиваем строку слов на отдельные слова
     boost::char_separator<char> sep(" ");
@@ -504,7 +697,7 @@ int Crawler::count_word_occurrences(const std::string &content, const std::strin
         if (word.empty())
             continue;
 
-        std::string lower_word = boost::algorithm::to_lower_copy(word);
+        std::string lower_word = ascii_lower_copy(word);
         int count = 0;
         size_t pos = 0;
 
@@ -529,7 +722,7 @@ bool Crawler::check_content(const std::string &content, const std::string &words
     if (text.empty())
         return false;
 
-    std::string lower_text = boost::algorithm::to_lower_copy(text);
+    std::string lower_text = ascii_lower_copy(text);
 
     // Разбиваем строку слов на отдельные слова
     boost::char_separator<char> sep(" ");
@@ -540,7 +733,7 @@ bool Crawler::check_content(const std::string &content, const std::string &words
         if (word.empty())
             continue;
 
-        std::string lower_word = boost::algorithm::to_lower_copy(word);
+        std::string lower_word = ascii_lower_copy(word);
         if (lower_text.find(lower_word) != std::string::npos)
         {
             return true;

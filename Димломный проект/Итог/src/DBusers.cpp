@@ -483,28 +483,27 @@ json::json DBuse::process_word_request(const std::string &word)
     execute_in_transaction([&](pqxx::work &txn)
                            {
         pqxx::result word_result = txn.exec_params(
-            "SELECT id, status FROM words WHERE word = $1", 
+            "SELECT id FROM words WHERE word = $1", 
             word);
-        
+
         if (!word_result.empty()) {
             int word_id = word_result[0][0].as<int>();
-            std::string status = word_result[0][1].as<std::string>();
-            
-            if (status == "completed") {
-                pqxx::result urls_result = txn.exec_params(
-    "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls "
-    "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
-    word_id);
-                
-                json::json urls_json;
-                for (auto row : urls_result) {
-                    urls_json.push_back({
-                        {"url", row["url"].as<std::string>()},
-                        {"count", row["word_count"].as<int>()},
-                        {"content", row["snippet"].as<std::string>()}
-                    });
-                }
-                
+
+            pqxx::result urls_result = txn.exec_params(
+                "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls "
+                "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
+                word_id);
+
+            json::json urls_json = json::json::array();
+            for (auto row : urls_result) {
+                urls_json.push_back({
+                    {"url", row["url"].as<std::string>()},
+                    {"count", row["word_count"].as<int>()},
+                    {"content", row["snippet"].as<std::string>()}
+                });
+            }
+
+            if (!urls_json.empty()) {
                 response = {
                     {"status", "completed"},
                     {"word_id", word_id},
@@ -512,24 +511,17 @@ json::json DBuse::process_word_request(const std::string &word)
                 };
             } else {
                 response = {
-                    {"status", status},
+                    {"status", "not_found"},
                     {"word_id", word_id},
-                    {"message", "Слово в процессе обработки"}
+                    {"urls", json::json::array()}
                 };
             }
         } else {
-            pqxx::result insert_result = txn.exec_params(
-                "INSERT INTO words (word) VALUES ($1) RETURNING id",
-                word);
-            
-            if (!insert_result.empty()) {
-                int new_word_id = insert_result[0][0].as<int>();
-                response = {
-                    {"status", "pending"},
-                    {"word_id", new_word_id},
-                    {"message", "Слово добавлено в очередь на обработку"}
-                };
-            }
+            // Не создаем новое слово автоматически. Возвращаем что не найдено
+            response = {
+                {"status", "not_found"},
+                {"message", "Слово отсутствует в индексе"}
+            };
         } });
 
     return response;

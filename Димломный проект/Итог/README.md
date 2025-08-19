@@ -25,10 +25,16 @@
 - PostgreSQL 12+
 - libpqxx 7.0+
 
-### Сборка проекта
+### Сборка проекта (Windows, Visual Studio 2022 x64)
 ```bash
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="D:/vcpkg/scripts/buildsystems/vcpkg.cmake" #так как файл vcpkg лежит в нестандартном пути
-cd build && cmake --build .
+# 1) Чистая конфигурация
+rd /s /q build 2>nul & mkdir build
+
+# 2) Генерация под VS 2022 x64 с vcpkg toolchain
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+# 3) Сборка
+cmake --build build --config Release
 
 ### После сборки запуск .exe 
 server.exe

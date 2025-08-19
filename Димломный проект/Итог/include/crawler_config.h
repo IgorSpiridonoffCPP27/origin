@@ -9,5 +9,5 @@ struct CrawlerConfig : public ConfigParser {
     int max_links_per_page;
     std::chrono::seconds poll_interval;
 
-    CrawlerConfig(const std::string& filename = "../../config.ini");
+    CrawlerConfig(const std::string& filename = "config.ini");
 };

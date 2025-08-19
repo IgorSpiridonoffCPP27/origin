@@ -187,9 +187,13 @@ std::string generate_html() {
                     } else {
                         showStatus(`По запросу "${query}" ничего не найдено`, 'pending');
                     }
-                } else {
-                    // Начинаем опрос статуса
+                } else if (data.status === 'not_found') {
+                    showStatus(`По запросу "${query}" ничего не найдено`, 'pending');
+                } else if (data.word_id) {
+                    // Начинаем опрос статуса, если известен идентификатор слова
                     pollStatus(data.word_id, query);
+                } else {
+                    showStatus('Нет данных по запросу', 'pending');
                 }
             } catch (error) {
                 showStatus(`Ошибка: ${error.message}`, 'error');

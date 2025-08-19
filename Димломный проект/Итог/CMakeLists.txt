@@ -1,4 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
+
+# Политика для Boost в CMake 4: используем CONFIG-пакеты
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
+# Подключаем vcpkg toolchain ДО вызова project(), если его не передали через -D
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "D:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "Vcpkg toolchain file")
+endif()
+
 project(BeastExample)
 
 # Указываем C++17
@@ -6,16 +17,27 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Указываем vcpkg
-set(CMAKE_TOOLCHAIN_FILE "D:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+# MSVC: устраняем конфликты PDB
+if(MSVC)
+    add_compile_options(/FS)
+    # Встраиваем отладочную информацию в OBJ (/Z7), чтобы исключить гонки за общий PDB
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+endif()
 
-# Ищем Boost и нужные компоненты
-find_package(Boost 1.70 REQUIRED COMPONENTS 
-    system 
+# Подсказка путей для поиска CONFIG-пакетов vcpkg
+if(DEFINED ENV{VCPKG_ROOT})
+    list(PREPEND CMAKE_PREFIX_PATH "$ENV{VCPKG_ROOT}/installed/x64-windows")
+endif()
+list(PREPEND CMAKE_PREFIX_PATH "D:/vcpkg/installed/x64-windows")
+
+# Ищем Boost и нужные компоненты (через vcpkg config)
+find_package(Boost 1.70 CONFIG REQUIRED COMPONENTS
+    system
     coroutine
     context
     date_time
 )
+find_package(ICU COMPONENTS uc i18n dt REQUIRED)
 
 # Ищем OpenSSL
 find_package(OpenSSL REQUIRED)
@@ -73,6 +95,7 @@ add_executable(crowler
     src/html_parser.cpp
     src/threadsafe_set.cpp
     src/url_tools.cpp
+    
 )
 target_link_libraries(crowler PRIVATE 
     Boost::boost
@@ -87,7 +110,19 @@ target_link_libraries(crowler PRIVATE
     libpqxx::pqxx
     gumbo
     nlohmann_json::nlohmann_json  # Добавлено, если используется JSON
+    ${ICU_LIBRARIES}
 )
+
+if(MSVC)
+    set_target_properties(crowler PROPERTIES 
+        COMPILE_PDB_NAME "crowler"
+        COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/crowler"
+    )
+    # Явно указываем отдельный PDB для компилятора, чтобы не использовать общий vc143.pdb
+    target_compile_options(crowler PRIVATE 
+        /Fd"${CMAKE_BINARY_DIR}/pdb/crowler/crowler_compile.pdb"
+    )
+endif()
 
 
 # Сервер1 (без изменений)
@@ -106,7 +141,18 @@ target_link_libraries(server PRIVATE
     ws2_32
     crypt32
     libpqxx::pqxx
+    ${ICU_LIBRARIES}
 )
+
+if(MSVC)
+    set_target_properties(server PROPERTIES 
+        COMPILE_PDB_NAME "server"
+        COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/server"
+    )
+    target_compile_options(server PRIVATE 
+        /Fd"${CMAKE_BINARY_DIR}/pdb/server/server_compile.pdb"
+    )
+endif()
 
 # Веб Сервер (без изменений)
 add_executable(web_server
@@ -126,4 +172,15 @@ target_link_libraries(web_server PRIVATE
     ws2_32
     crypt32
     libpqxx::pqxx
+    ${ICU_LIBRARIES}
 )
+
+if(MSVC)
+    set_target_properties(web_server PROPERTIES 
+        COMPILE_PDB_NAME "web_server"
+        COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/web_server"
+    )
+    target_compile_options(web_server PRIVATE 
+        /Fd"${CMAKE_BINARY_DIR}/pdb/web_server/web_server_compile.pdb"
+    )
+endif()

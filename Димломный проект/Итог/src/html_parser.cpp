@@ -41,13 +41,18 @@ std::string HtmlParser::extract_plain_text(const std::string& html) {
 std::string HtmlParser::extract_text(GumboNode* node) {
     if (node->type == GUMBO_NODE_TEXT) {
         return std::string(node->v.text.text);
+    } else if (node->type == GUMBO_NODE_WHITESPACE) {
+        return " ";
     } else if (node->type == GUMBO_NODE_ELEMENT) {
-        if (node->v.element.tag == GUMBO_TAG_SCRIPT || node->v.element.tag == GUMBO_TAG_STYLE) {
+        if (node->v.element.tag == GUMBO_TAG_SCRIPT || node->v.element.tag == GUMBO_TAG_STYLE || node->v.element.tag == GUMBO_TAG_NOSCRIPT) {
             return "";
         }
         std::string text;
         GumboVector* children = &node->v.element.children;
         for (unsigned int i = 0; i < children->length; ++i) {
+            if (i > 0 && (node->v.element.tag == GUMBO_TAG_P || node->v.element.tag == GUMBO_TAG_BR || node->v.element.tag == GUMBO_TAG_LI || node->v.element.tag == GUMBO_TAG_DIV)) {
+                text += ' ';
+            }
             text += extract_text(static_cast<GumboNode*>(children->data[i]));
         }
         return text;

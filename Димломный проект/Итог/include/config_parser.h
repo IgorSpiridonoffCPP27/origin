@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <vector>
+#include <filesystem>
 
 class ConfigParser {
 protected:
@@ -26,9 +28,9 @@ protected:
                 line = line.substr(0, comment_pos);
             }
             
-            // Удаление пробелов и кавычек
-            line.erase(std::remove_if(line.begin(), line.end(), 
-                       [](char c) { return std::isspace(c) || c == '"'; }), 
+            // Удаление пробелов и кавычек (исправлено: безопасно приводим к unsigned char)
+            line.erase(std::remove_if(line.begin(), line.end(),
+                       [](char c) { return std::isspace(static_cast<unsigned char>(c)) || c == '"'; }),
                        line.end());
             
             if (line.empty()) continue;
@@ -48,7 +50,28 @@ protected:
 
 public:
     ConfigParser(const std::string& filename = "../../config.ini") {
-        load_config(filename);
+        std::vector<std::string> candidates;
+        candidates.push_back(filename);
+        candidates.push_back("config.ini");
+        candidates.push_back("./config.ini");
+        candidates.push_back("../config.ini");
+        candidates.push_back("../../config.ini");
+
+        bool loaded = false;
+        for (const auto& p : candidates) {
+            try {
+                if (std::filesystem::exists(std::filesystem::path(p))) {
+                    load_config(p);
+                    loaded = true;
+                    break;
+                }
+            } catch (...) {
+                // ignore and try next
+            }
+        }
+        if (!loaded) {
+            throw std::runtime_error("Cannot open config file: " + filename);
+        }
     }
 
     std::string get(const std::string& key, const std::string& default_value = "") const {

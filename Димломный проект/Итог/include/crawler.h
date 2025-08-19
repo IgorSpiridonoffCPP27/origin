@@ -11,6 +11,7 @@
 #include <csignal>
 #include <openssl/crypto.h>
 #include <boost/tokenizer.hpp>
+#include <unordered_map>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -27,6 +28,10 @@ public:
     net::thread_pool& get_pool();
     std::string prepare_wiki_url(const std::string& word);
     void process_word(const std::string& word);
+
+    // New crawling mode: start from a URL and index all words on pages
+    void crawl_url(const std::string& url);
+    void crawl_start_url();
 
 private:
     struct DownloadResult {
@@ -53,4 +58,11 @@ private:
     DownloadResult download_page(const std::string& url, int redirect_count = 0);
     int count_word_occurrences(const std::string& content, const std::string& words_str);
     bool check_content(const std::string& content, const std::string& words_str);
+
+    // Helpers for URL-first crawling mode
+    void crawl_recursive(const std::vector<std::pair<std::string, std::string>>& pages,
+                         int current_depth);
+    void save_pages_all_words(const std::vector<std::pair<std::string, std::string>>& pages);
+    std::unordered_map<std::string, int> compute_word_counts(const std::string& text);
+    static bool is_word_char(unsigned char c);
 };
