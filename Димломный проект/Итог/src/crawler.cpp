@@ -5,6 +5,58 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string.hpp> // string split, tokenizer
 #include <boost/tokenizer.hpp>
+
+// Локальная очистка до валидного UTF-8 (дублирует реализацию в DBusers.cpp)
+static inline bool is_cont_byte(unsigned char b) { return (b & 0xC0) == 0x80; }
+static std::string sanitize_utf8(const std::string &input)
+{
+    std::string out;
+    out.reserve(input.size());
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(input.data());
+    size_t i = 0;
+    const size_t n = input.size();
+    while (i < n)
+    {
+        unsigned char c = p[i];
+        if (c <= 0x7F)
+        {
+            out.push_back(static_cast<char>(c));
+            ++i;
+        }
+        else if (c >= 0xC2 && c <= 0xDF)
+        {
+            if (i + 1 < n && is_cont_byte(p[i + 1])) { out.append(reinterpret_cast<const char *>(p + i), 2); i += 2; }
+            else { ++i; }
+        }
+        else if (c == 0xE0)
+        {
+            if (i + 2 < n && p[i + 1] >= 0xA0 && p[i + 1] <= 0xBF && is_cont_byte(p[i + 2])) { out.append(reinterpret_cast<const char *>(p + i), 3); i += 3; }
+            else { ++i; }
+        }
+        else if (c >= 0xE1 && c <= 0xEF)
+        {
+            if (i + 2 < n && is_cont_byte(p[i + 1]) && is_cont_byte(p[i + 2])) { out.append(reinterpret_cast<const char *>(p + i), 3); i += 3; }
+            else { ++i; }
+        }
+        else if (c == 0xF0)
+        {
+            if (i + 3 < n && p[i + 1] >= 0x90 && p[i + 1] <= 0xBF && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3])) { out.append(reinterpret_cast<const char *>(p + i), 4); i += 4; }
+            else { ++i; }
+        }
+        else if (c >= 0xF1 && c <= 0xF3)
+        {
+            if (i + 3 < n && is_cont_byte(p[i + 1]) && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3])) { out.append(reinterpret_cast<const char *>(p + i), 4); i += 4; }
+            else { ++i; }
+        }
+        else if (c == 0xF4)
+        {
+            if (i + 3 < n && p[i + 1] >= 0x80 && p[i + 1] <= 0x8F && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3])) { out.append(reinterpret_cast<const char *>(p + i), 4); i += 4; }
+            else { ++i; }
+        }
+        else { ++i; }
+    }
+    return out;
+}
 Crawler::Crawler(DBuse &db, const CrawlerConfig &config)
     : db_(db), config_(config), pool_(config.max_connections), ssl_ctx_(ssl::context::tlsv12_client)
 {
@@ -416,11 +468,12 @@ std::unordered_map<std::string, int> Crawler::compute_word_counts(const std::str
     // Treat common punctuation and whitespace as separators; keep UTF-8 letters intact
     static const std::string seps = " \t\n\r.,;:!?()[]{}<>\"'`~@#$%^&*-_=+\\/|\u00A0";
     boost::char_separator<char> sep(seps.c_str());
-    auto lowered = ascii_lower_copy(text);
+    // Очистим текст от невалидного UTF-8 перед токенизацией
+    auto lowered = ascii_lower_copy(sanitize_utf8(text));
     boost::tokenizer<boost::char_separator<char>> tokens(lowered, sep);
     for (const auto &tok : tokens) {
         if (tok.size() < 2) continue; // skip 1-char tokens
-        counts[tok] += 1;
+        counts[sanitize_utf8(tok)] += 1;
     }
     return counts;
 }

@@ -2,10 +2,14 @@
 #include "crawler.h"
 #include <csignal>
 #include <windows.h>
+#include <atomic>
+#include <thread>
+
+static std::atomic<bool> g_should_stop{false};
 
 void signal_handler(int signal) {
     LOG("Interrupt signal (" + std::to_string(signal) + ") received");
-    exit(signal);
+    g_should_stop = true;
 }
 
 int main(int argc, char* argv[]) {
@@ -49,9 +53,14 @@ int main(int argc, char* argv[]) {
         LOG("Starting crawler...");
         crawler.start();
 
-        // New behavior: crawl the start URL from config and index all words
+        // Первичный обход стартовой страницы
         LOG("Crawling start URL and indexing words...");
         crawler.crawl_start_url();
+
+        // Держим процесс активным для фонового мониторинга до сигнала остановки
+        while (!g_should_stop) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
 
         LOG("Stopping crawler...");
         crawler.stop();

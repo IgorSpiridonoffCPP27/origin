@@ -2,6 +2,113 @@
 #include <boost/algorithm/string.hpp>
 #include <stdexcept>
 
+// Простая очистка до валидного UTF-8: пропускаем недопустимые байты/последовательности
+static inline bool is_cont_byte(unsigned char b) { return (b & 0xC0) == 0x80; }
+
+static std::string sanitize_utf8(const std::string &input)
+{
+    std::string out;
+    out.reserve(input.size());
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(input.data());
+    size_t i = 0;
+    const size_t n = input.size();
+    while (i < n)
+    {
+        unsigned char c = p[i];
+        if (c <= 0x7F)
+        {
+            // ASCII
+            out.push_back(static_cast<char>(c));
+            ++i;
+        }
+        else if (c >= 0xC2 && c <= 0xDF)
+        {
+            // 2-byte
+            if (i + 1 < n && is_cont_byte(p[i + 1]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 2);
+                i += 2;
+            }
+            else
+            {
+                // пропускаем некорректный стартовый байт
+                ++i;
+            }
+        }
+        else if (c == 0xE0)
+        {
+            // 3-byte, спец-диапазон для предотвращения overlong
+            if (i + 2 < n && p[i + 1] >= 0xA0 && p[i + 1] <= 0xBF && is_cont_byte(p[i + 2]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 3);
+                i += 3;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        else if (c >= 0xE1 && c <= 0xEF)
+        {
+            // 3-byte
+            if (i + 2 < n && is_cont_byte(p[i + 1]) && is_cont_byte(p[i + 2]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 3);
+                i += 3;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        else if (c == 0xF0)
+        {
+            // 4-byte, спец-диапазон
+            if (i + 3 < n && p[i + 1] >= 0x90 && p[i + 1] <= 0xBF && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 4);
+                i += 4;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        else if (c >= 0xF1 && c <= 0xF3)
+        {
+            // 4-byte
+            if (i + 3 < n && is_cont_byte(p[i + 1]) && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 4);
+                i += 4;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        else if (c == 0xF4)
+        {
+            // 4-byte, верхняя граница
+            if (i + 3 < n && p[i + 1] >= 0x80 && p[i + 1] <= 0x8F && is_cont_byte(p[i + 2]) && is_cont_byte(p[i + 3]))
+            {
+                out.append(reinterpret_cast<const char *>(p + i), 4);
+                i += 4;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        else
+        {
+            // Неверный стартовый байт
+            ++i;
+        }
+    }
+    return out;
+}
+
 DBuse::DBuse(const std::string &host,
              const std::string &dbname,
              const std::string &user,
@@ -295,7 +402,7 @@ void DBuse::create_tables()
             "CREATE TABLE IF NOT EXISTS word_urls("
             "id SERIAL PRIMARY KEY, "
             "word_id INTEGER REFERENCES words(id) ON DELETE CASCADE, "
-            "url VARCHAR(500) NOT NULL, "
+            "url TEXT NOT NULL, "
             "html_content TEXT, "
             "word_count INTEGER DEFAULT 0, "
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
@@ -323,6 +430,15 @@ void DBuse::run_migrations() {
                 
                 
             }
+
+            // Миграция: расширяем тип url до TEXT, если он ещё VARCHAR
+            auto url_type = txn.exec(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name = 'word_urls' AND column_name = 'url'"
+            );
+            if (!url_type.empty() && url_type[0][0].as<std::string>().find("char") != std::string::npos) {
+                txn.exec("ALTER TABLE word_urls ALTER COLUMN url TYPE TEXT");
+            }
         } catch (const std::exception& e) {
             throw;
         }
@@ -336,6 +452,10 @@ bool DBuse::save_word_url(int word_id,
                          int word_count) {
     bool saved = false;
     execute_in_transaction([&](pqxx::work& txn) {
+        std::string safe_url = sanitize_utf8(url);
+        std::string safe_html = sanitize_utf8(html_content);
+        std::string safe_text = sanitize_utf8(text_content);
+        boost::algorithm::trim(safe_url);
         txn.exec_params(
             "INSERT INTO word_urls (word_id, url, html_content, text_content, word_count) "
             "VALUES ($1, $2, $3, $4, $5) "
@@ -343,7 +463,7 @@ bool DBuse::save_word_url(int word_id,
             "SET html_content = EXCLUDED.html_content, "
             "    text_content = EXCLUDED.text_content, "
             "    word_count = EXCLUDED.word_count",
-            word_id, url, html_content, text_content, word_count);
+            word_id, safe_url, safe_html, safe_text, word_count);
         saved = true;
         
         // Обновляем время последнего изменения для отслеживания прогресса
@@ -359,9 +479,11 @@ int DBuse::get_word_id(const std::string &word)
     int word_id = -1;
     execute_in_transaction([&](pqxx::work &txn)
                            {
+        std::string w = sanitize_utf8(word);
+        boost::algorithm::trim(w);
         auto result = txn.exec_params(
             "SELECT id FROM words WHERE word = $1", 
-            word);
+            w);
         if (!result.empty()) {
             word_id = result[0][0].as<int>();
         } });
@@ -373,9 +495,11 @@ bool DBuse::url_exists_for_word(int word_id, const std::string &url)
     bool exists = false;
     execute_in_transaction([&](pqxx::work &txn)
                            {
+        std::string safe_url = sanitize_utf8(url);
+        boost::algorithm::trim(safe_url);
         auto result = txn.exec_params(
             "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
-            word_id, url);
+            word_id, safe_url);
         exists = !result.empty(); });
     return exists;
 }
@@ -440,15 +564,17 @@ std::string DBuse::get_full_word_string(const std::string &word)
 
 void DBuse::add_word_to_tables(const std::string &word)
 {
-    if (word.empty())
+    std::string w = sanitize_utf8(word);
+    boost::algorithm::trim(w);
+    if (w.empty())
     {
         std::cerr << "Пустое слово не может быть добавлено\n";
         return;
     }
 
-    if (word.length() > 100)
+    if (w.length() > 100)
     {
-        std::cerr << "Слово '" << word << "' слишком длинное (макс. 100 символов)\n";
+        std::cerr << "Слово '" << w << "' слишком длинное (макс. 100 символов)\n";
         return;
     }
 
@@ -459,19 +585,19 @@ void DBuse::add_word_to_tables(const std::string &word)
                 "INSERT INTO words (word) VALUES ($1) "
                 "ON CONFLICT (word) DO UPDATE SET word=EXCLUDED.word "
                 "RETURNING id",
-                word);
+                w);
 
             if (!result.empty()) {
                 const int word_id = result[0]["id"].as<int>();
-                std::cout << "Слово '" << word << "' обработано. ID: " << word_id << "\n";
+                std::cout << "Слово '" << w << "' обработано. ID: " << word_id << "\n";
             }
         } catch (const pqxx::unique_violation& e) {
             auto existing = txn.exec_params(
                 "SELECT id FROM words WHERE word = $1", 
-                word);
+                w);
             if (!existing.empty()) {
                 const int word_id = existing[0]["id"].as<int>();
-                std::cout << "Слово '" << word << "' уже существует. ID: " << word_id << "\n";
+                std::cout << "Слово '" << w << "' уже существует. ID: " << word_id << "\n";
             }
         } });
 }
