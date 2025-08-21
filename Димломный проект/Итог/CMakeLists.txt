@@ -95,6 +95,7 @@ add_executable(crowler
     src/html_parser.cpp
     src/threadsafe_set.cpp
     src/url_tools.cpp
+    src/word_tools.cpp
     
 )
 target_link_libraries(crowler PRIVATE 
@@ -111,7 +112,12 @@ target_link_libraries(crowler PRIVATE
     gumbo
     nlohmann_json::nlohmann_json  # Добавлено, если используется JSON
     ${ICU_LIBRARIES}
+    ICU::uc
+    ICU::i18n
 )
+
+# Подключаем заголовки ICU для целей, где используется word_tools
+target_include_directories(crowler PRIVATE ${ICU_INCLUDE_DIRS})
 
 if(MSVC)
     set_target_properties(crowler PROPERTIES 
@@ -129,6 +135,7 @@ endif()
 add_executable(server
     src/server.cpp 
     src/DBusers.cpp
+    src/word_tools.cpp
 )
 target_link_libraries(server PRIVATE 
     Boost::boost
@@ -142,7 +149,11 @@ target_link_libraries(server PRIVATE
     crypt32
     libpqxx::pqxx
     ${ICU_LIBRARIES}
+    ICU::uc
+    ICU::i18n
 )
+
+target_include_directories(server PRIVATE ${ICU_INCLUDE_DIRS})
 
 if(MSVC)
     set_target_properties(server PROPERTIES 

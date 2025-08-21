@@ -4,7 +4,9 @@
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string.hpp> // string split, tokenizer
-#include <boost/tokenizer.hpp>
+// #include <boost/tokenizer.hpp> // Убрано - больше не используется
+#include "word_tools.h"
+#include <fstream>
 
 // Локальная очистка до валидного UTF-8 (дублирует реализацию в DBusers.cpp)
 static inline bool is_cont_byte(unsigned char b) { return (b & 0xC0) == 0x80; }
@@ -72,6 +74,7 @@ Crawler::Crawler(DBuse &db, const CrawlerConfig &config)
         throw;
     }
 }
+
 // Safe ASCII-only lowercase to avoid CRT ctype assertions on UTF-8 bytes
 static std::string ascii_lower_copy(const std::string& s)
 {
@@ -83,7 +86,6 @@ static std::string ascii_lower_copy(const std::string& s)
     }
     return r;
 }
-
 
 // Реализации методов Crawler (process_recursive, save_pages, monitor_new_words, download_page, count_word_occurrences, check_content)
 // [Здесь должна быть полная реализация методов класса Crawler из исходного кода]
@@ -148,6 +150,11 @@ std::string Crawler::prepare_wiki_url(const std::string &word)
 
 void Crawler::process_word(const std::string &word)
 {
+    // Проверяем длину слова
+    if (word.size() < 3 || word.size() > 32) {
+        LOG("Слово '" + word + "' не соответствует требованиям по длине, пропускаем");
+        return;
+    }
     LOG("Processing word: " + word);
     visited_urls_.clear();
 
@@ -165,7 +172,7 @@ void Crawler::process_word(const std::string &word)
                                          "UPDATE words SET status = 'processing' WHERE id = $1",
                                          word_id); });
         std::vector<std::pair<std::string, std::string>> url_templates = {
-            {"Wiktionary", config_.get("Crowler.start_page") + prepare_wiki_url(word)},
+            {"Start", config_.get("Crowler.start_page")},
             {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
 
         bool processed = false;
@@ -416,15 +423,23 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
                 std::packaged_task<void()>([&, url, html]() {
                     auto links = HtmlParser::extract_links(html, url);
                     LOG("[ALL] Found " + std::to_string(links.size()) + " links at: " + url);
+                    
+                    // Детальное логирование всех найденных ссылок
+                    for (const auto& link : links) {
+                        LOG("[ALL] Raw link found: " + link);
+                    }
 
                     std::string current_host = get_host(url);
                     int links_processed = 0;
 
                     for (const auto &link : links) {
-                        if (links_processed >= config_.max_links_per_page) break;
+                        if (links_processed >= config_.max_links_per_page) {
+                            LOG("[ALL] Max links per page reached: " + std::to_string(config_.max_links_per_page));
+                            break;
+                        }
 
                         if (get_host(link) != current_host) {
-                            LOG("[ALL] Skipping external link: " + link);
+                            LOG("[ALL] Skipping external link: " + link + " (host: " + get_host(link) + " vs current: " + current_host + ")");
                             continue;
                         }
 
@@ -436,15 +451,17 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
                         LOG("[ALL] Downloading link: " + link);
                         auto result = download_page(link);
                         if (result.ec || result.html.empty()) {
-                            LOG("[ALL] Failed to download link: " + link);
+                            LOG("[ALL] Failed to download link: " + link + " (error: " + result.ec.message() + ")");
                             continue;
                         }
 
+                        LOG("[ALL] Successfully downloaded: " + link + " -> " + result.final_url);
                         visited_urls_.insert(result.final_url);
 
                         std::lock_guard lock(next_level_mutex);
                         next_level_pages.emplace_back(result.final_url, result.html);
                         links_processed++;
+                        LOG("[ALL] Added to next level: " + link + " (processed: " + std::to_string(links_processed) + ")");
                     }
                 }))
         );
@@ -457,6 +474,8 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
     if (!next_level_pages.empty()) {
         LOG("[ALL] Found " + std::to_string(next_level_pages.size()) + " pages for next level");
         crawl_recursive(next_level_pages, current_depth + 1);
+    } else {
+        LOG("[ALL] No pages found for next level at depth " + std::to_string(current_depth));
     }
 }
 
@@ -464,17 +483,66 @@ std::unordered_map<std::string, int> Crawler::compute_word_counts(const std::str
 {
     std::unordered_map<std::string, int> counts;
     if (text.empty()) return counts;
-
-    // Treat common punctuation and whitespace as separators; keep UTF-8 letters intact
-    static const std::string seps = " \t\n\r.,;:!?()[]{}<>\"'`~@#$%^&*-_=+\\/|\u00A0";
-    boost::char_separator<char> sep(seps.c_str());
-    // Очистим текст от невалидного UTF-8 перед токенизацией
-    auto lowered = ascii_lower_copy(sanitize_utf8(text));
-    boost::tokenizer<boost::char_separator<char>> tokens(lowered, sep);
-    for (const auto &tok : tokens) {
-        if (tok.size() < 2) continue; // skip 1-char tokens
-        counts[sanitize_utf8(tok)] += 1;
+    
+    // Используем более простой подход для разбиения на слова
+    // Разбиваем по пробелам и пунктуации, но сохраняем целостность UTF-8 символов
+    std::vector<std::string> words;
+    std::string current_word;
+    
+    for (size_t i = 0; i < text.size(); i++) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        
+        // Проверяем, является ли символ разделителем
+        bool is_separator = false;
+        
+        // ASCII разделители
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || 
+            c == '.' || c == ',' || c == ';' || c == ':' || 
+            c == '!' || c == '?' || c == '(' || c == ')' || 
+            c == '[' || c == ']' || c == '{' || c == '}' || 
+            c == '<' || c == '>' || c == '"' || 
+            c == '`' || c == '~' || c == '@' || c == '#' || 
+            c == '$' || c == '%' || c == '^' || c == '&' || 
+            c == '*' || c == '-' || c == '_' || c == '=' || 
+            c == '+' || c == '\\' || c == '/' || c == '|' || 
+            c == 0xA0) { // non-breaking space; не отделяем по апострофу
+            is_separator = true;
+        }
+        
+        if (is_separator) {
+            if (!current_word.empty()) {
+                words.push_back(current_word);
+                current_word.clear();
+            }
+        } else {
+            // Добавляем символ к текущему слову
+            current_word += text[i];
+        }
     }
+    
+    // Добавляем последнее слово, если оно есть
+    if (!current_word.empty()) {
+        words.push_back(current_word);
+    }
+    
+    int total_tokens = 0;
+    int filtered_tokens = 0;
+    
+    for (const auto &word : words) {
+        total_tokens++;
+        std::string normalized_word = word;
+        if (filter_and_normalize_word(normalized_word)) {
+            counts[normalized_word] += 1;
+        } else {
+            filtered_tokens++;
+            if (filtered_tokens <= 10) { // Показываем первые 10 отфильтрованных слов
+                std::cout << "[DEBUG] Отфильтровано слово: '" << word << "'" << std::endl;
+            }
+        }
+    }
+    
+    std::cout << "[DEBUG] Всего токенов: " << total_tokens << ", отфильтровано: " << filtered_tokens << ", добавлено: " << counts.size() << std::endl;
+    
     return counts;
 }
 
@@ -487,26 +555,31 @@ void Crawler::save_pages_all_words(const std::vector<std::pair<std::string, std:
 {
     LOG("[ALL] Saving " + std::to_string(pages.size()) + " pages (all words)");
     try {
-        for (const auto &pair : pages) {
-            const std::string &url = pair.first;
-            const std::string &html = pair.second;
+        for (size_t idx = 0; idx < pages.size(); ++idx) {
+            const std::string &url = pages[idx].first;
+            const std::string &html = pages[idx].second;
             std::string plain_text = HtmlParser::extract_plain_text(html);
+            if (idx == 0) {
+                LOG("[DEBUG] Plain text from first page: " + plain_text);
+            }
             auto counts = compute_word_counts(plain_text);
-
             for (const auto &entry : counts) {
                 const std::string &word = entry.first;
                 int count = entry.second;
-
-                // Ensure word exists in words table, then save relation
+                // 1) гарантируем наличие слова в таблице words
                 db_.add_word_to_tables(word);
+                // 2) получаем id слова
                 int word_id = db_.get_word_id(word);
-                if (word_id == -1) continue;
+                if (word_id == -1) {
+                    continue;
+                }
+                // 3) сохраняем связь слово → url с контентом и количеством вхождений
                 db_.save_word_url(word_id, url, html, plain_text, count);
             }
             LOG("[ALL] Indexed page: " + url + " (" + std::to_string(counts.size()) + " words)");
         }
     } catch (const std::exception &e) {
-        LOG(std::string("save_pages_all_words error: ") + e.what());
+        LOG("[ALL] Error saving pages: " + std::string(e.what()));
     }
 }
 

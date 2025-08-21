@@ -1,6 +1,7 @@
 #include "DBusers.h"
 #include <boost/algorithm/string.hpp>
 #include <stdexcept>
+#include "word_tools.h"
 
 // Простая очистка до валидного UTF-8: пропускаем недопустимые байты/последовательности
 static inline bool is_cont_byte(unsigned char b) { return (b & 0xC0) == 0x80; }
@@ -108,7 +109,17 @@ static std::string sanitize_utf8(const std::string &input)
     }
     return out;
 }
-
+// Safe ASCII-only lowercase to avoid CRT ctype assertions on UTF-8 bytes
+static std::string ascii_lower_copy(const std::string& s)
+{
+    std::string r;
+    r.reserve(s.size());
+    for (unsigned char uc : s) {
+        if (uc >= 'A' && uc <= 'Z') r.push_back(static_cast<char>(uc + 32));
+        else r.push_back(static_cast<char>(uc));
+    }
+    return r;
+}
 DBuse::DBuse(const std::string &host,
              const std::string &dbname,
              const std::string &user,
@@ -565,41 +576,35 @@ std::string DBuse::get_full_word_string(const std::string &word)
 void DBuse::add_word_to_tables(const std::string &word)
 {
     std::string w = sanitize_utf8(word);
-    boost::algorithm::trim(w);
-    if (w.empty())
-    {
-        std::cerr << "Пустое слово не может быть добавлено\n";
+    if (!filter_and_normalize_word(w)) {
+        std::cerr << "Слово '" << word << "' не прошло фильтрацию\n";
         return;
     }
-
-    if (w.length() > 100)
-    {
-        std::cerr << "Слово '" << w << "' слишком длинное (макс. 100 символов)\n";
+    
+    std::cout << "[DEBUG] Добавляю слово в базу: '" << word << "' -> '" << w << "'" << std::endl;
+    
+    // Проверка на дубликат
+    bool exists = false;
+    execute_in_transaction([&](pqxx::work &txn) {
+        pqxx::result res = txn.exec_params("SELECT id FROM words WHERE word = $1", w);
+        exists = !res.empty();
+    });
+    if (exists) {
+        std::cout << "[DEBUG] Слово '" << w << "' уже существует в базе" << std::endl;
         return;
     }
-
+    
     execute_in_transaction([&](pqxx::work &txn)
                            {
         try {
             auto result = txn.exec_params(
-                "INSERT INTO words (word) VALUES ($1) "
-                "ON CONFLICT (word) DO UPDATE SET word=EXCLUDED.word "
-                "RETURNING id",
+                "INSERT INTO words (word) VALUES ($1) RETURNING id",
                 w);
-
-            if (!result.empty()) {
-                const int word_id = result[0]["id"].as<int>();
-                std::cout << "Слово '" << w << "' обработано. ID: " << word_id << "\n";
-            }
-        } catch (const pqxx::unique_violation& e) {
-            auto existing = txn.exec_params(
-                "SELECT id FROM words WHERE word = $1", 
-                w);
-            if (!existing.empty()) {
-                const int word_id = existing[0]["id"].as<int>();
-                std::cout << "Слово '" << w << "' уже существует. ID: " << word_id << "\n";
-            }
-        } });
+            std::cout << "[DEBUG] Слово '" << w << "' успешно добавлено в базу" << std::endl;
+        } catch (const std::exception &e) {
+            std::cerr << "Ошибка при добавлении слова: " << e.what() << std::endl;
+        }
+    });
 }
 
 json::json DBuse::process_word_request(const std::string &word)

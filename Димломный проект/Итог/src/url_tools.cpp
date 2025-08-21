@@ -1,6 +1,7 @@
 #include "url_tools.h"
 #include <vector>
 #include <algorithm>
+#include <iostream> // Added for std::cout
 
 std::string url_encode(const std::string& value) {
     std::ostringstream escaped;
@@ -17,6 +18,7 @@ std::string url_encode(const std::string& value) {
     }
     return escaped.str();
 }
+
 
 // Resolve dot segments per RFC 3986
 static std::string resolve_dot_segments(const std::string& input_path) {
@@ -63,7 +65,9 @@ std::string normalize_url(const std::string& url, const std::string& base_url) {
 
 	// Parse base: scheme://authority/path?query#frag
 	size_t proto_pos = base_url.find("://");
-	if (proto_pos == std::string::npos) return "";
+	if (proto_pos == std::string::npos) {
+		return "";
+	}
 	std::string scheme = base_url.substr(0, proto_pos);
 	size_t auth_start = proto_pos + 3;
 	size_t path_start = base_url.find('/', auth_start);
@@ -81,7 +85,7 @@ std::string normalize_url(const std::string& url, const std::string& base_url) {
 
 	// Query-only href
 	if (!url.empty() && url[0] == '?') {
-		return scheme + "://" + authority + base_path + url; // url already starts with '?'
+		return scheme + "://" + authority + base_path + url;
 	}
 
 	// Build candidate path for relative URL
@@ -113,7 +117,9 @@ std::string get_host(const std::string& url) {
 		host_start = 2;
 	} else {
 		size_t protocol_pos = url.find("://");
-		if (protocol_pos == std::string::npos) return "";
+		if (protocol_pos == std::string::npos) {
+			return "";
+		}
 		host_start = protocol_pos + 3;
 	}
 	size_t host_end = url.find_first_of("/#?", host_start);

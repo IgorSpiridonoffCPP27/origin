@@ -1,4 +1,5 @@
 #include "html_parser.h"
+#include <iostream>
 
 std::vector<std::string> HtmlParser::extract_links(const std::string& html, const std::string& base_url) {
     std::vector<std::string> links;
@@ -16,7 +17,8 @@ void HtmlParser::extract_links(GumboNode* node, const std::string& base_url, std
     if (node->v.element.tag == GUMBO_TAG_A) {
         GumboAttribute* href = gumbo_get_attribute(&node->v.element.attributes, "href");
         if (href) {
-            std::string url = normalize_url(href->value, base_url);
+            std::string original_url = href->value;
+            std::string url = normalize_url(original_url, base_url);
             if (!url.empty()) {
                 links.push_back(url);
             }
