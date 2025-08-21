@@ -2,6 +2,7 @@
 #include <boost/algorithm/string.hpp>
 #include <stdexcept>
 #include "word_tools.h"
+#include "url_tools.h"
 
 // Простая очистка до валидного UTF-8: пропускаем недопустимые байты/последовательности
 static inline bool is_cont_byte(unsigned char b) { return (b & 0xC0) == 0x80; }
@@ -119,6 +120,22 @@ static std::string ascii_lower_copy(const std::string& s)
         else r.push_back(static_cast<char>(uc));
     }
     return r;
+}
+
+// Приведение имени хоста к каноническому виду: нижний регистр, без префикса www.
+static std::string normalize_host_name(const std::string& host)
+{
+    std::string h;
+    h.reserve(host.size());
+    for (unsigned char c : host) {
+        if (c >= 'A' && c <= 'Z') h.push_back(static_cast<char>(c + 32));
+        else h.push_back(static_cast<char>(c));
+    }
+    if (h.rfind("www.", 0) == 0) {
+        h.erase(0, 4);
+    }
+    if (!h.empty() && h.back() == '.') h.pop_back();
+    return h;
 }
 DBuse::DBuse(const std::string &host,
              const std::string &dbname,
@@ -655,6 +672,158 @@ json::json DBuse::process_word_request(const std::string &word)
             };
         } });
 
+    return response;
+}
+
+// Обработка до 4 слов, разделённых пробелами. Правила:
+// 1) Если все слова найдены и есть общие URL, то по каждому общему URL суммируем word_count всех слов.
+//    Иначе выводим объединённый список URL по каждому слову с их фактическими count.
+// 2) Если не все слова существуют, обрабатываем только существующие по правилу (1).
+// 3) Если ни одно слово не найдено, возвращаем статус not_found и имеющееся сообщение наверху стека.
+json::json DBuse::process_words_request(const std::string &query)
+{
+    using nlohmann::json;
+    json response;
+
+    // Парсинг до 4 слов
+    std::vector<std::string> raw_parts;
+    boost::split(raw_parts, query, boost::is_any_of(" \t\n\r"), boost::token_compress_on);
+    if (raw_parts.size() > 4) {
+        return json{{"status", "not_found"}, {"message", "Запрос должен содержать не более 4 слов"}};
+    }
+    std::vector<std::string> words;
+    for (const auto &p : raw_parts) {
+        if (!p.empty()) words.push_back(p);
+        if (words.size() == 4) break;
+    }
+
+    if (words.empty()) {
+        return json{{"status", "not_found"}, {"message", "Введите слово"}};
+    }
+
+    // Нормализуем слова так же, как при добавлении
+    for (auto &w : words) {
+        std::string tmp = w;
+        if (!filter_and_normalize_word(tmp)) {
+            // если слово невалидно, исключаем его
+            tmp.clear();
+        }
+        w = tmp;
+    }
+    std::vector<std::string> valid_words;
+    for (auto &w : words) if (!w.empty()) valid_words.push_back(w);
+    if (valid_words.empty()) {
+        return json{{"status", "not_found"}, {"message", "Нет валидных слов"}};
+    }
+
+    // Особый случай: одно слово — возвращаем страницы (URL), как раньше
+    if (valid_words.size() == 1) {
+        return process_word_request(valid_words[0]);
+    }
+
+    struct UrlData { int count; std::string snippet; };
+    // Для каждого слова собираем карту URL -> {count, snippet}
+    std::vector<std::unordered_map<std::string, UrlData>> perWordUrlMaps;
+    perWordUrlMaps.reserve(valid_words.size());
+
+    std::vector<int> found_word_ids;
+    found_word_ids.reserve(valid_words.size());
+
+    execute_in_transaction([&](pqxx::work &txn) {
+        for (const auto &w : valid_words) {
+            pqxx::result word_result = txn.exec_params("SELECT id FROM words WHERE word = $1", w);
+            if (word_result.empty()) {
+                perWordUrlMaps.emplace_back();
+                continue;
+            }
+            int word_id = word_result[0][0].as<int>();
+            found_word_ids.push_back(word_id);
+
+            pqxx::result urls_result = txn.exec_params(
+                "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls WHERE word_id = $1",
+                word_id);
+
+            std::unordered_map<std::string, UrlData> urlMap;
+            urlMap.reserve(urls_result.size());
+            for (auto row : urls_result) {
+                std::string url = row["url"].as<std::string>();
+                int cnt = row["word_count"].as<int>();
+                std::string snippet = row["snippet"].as<std::string>();
+                urlMap[url] = UrlData{cnt, snippet};
+            }
+            perWordUrlMaps.push_back(std::move(urlMap));
+        }
+    });
+
+    // Удалим пустые карты (для ненайденных или без URL слов)
+    std::vector<std::unordered_map<std::string, UrlData>> nonEmptyMaps;
+    for (auto &m : perWordUrlMaps) if (!m.empty()) nonEmptyMaps.push_back(std::move(m));
+
+    if (nonEmptyMaps.empty()) {
+        return json{{"status", "not_found"}, {"message", "Слова отсутствуют в индексе"}};
+    }
+
+    // Проверяем наличие общих страниц (URL) у всех найденных слов
+    std::unordered_map<std::string, int> urlPresence;
+    for (const auto &m : nonEmptyMaps) {
+        for (const auto &kv : m) urlPresence[kv.first]++;
+    }
+    const size_t needPresence = nonEmptyMaps.size();
+    std::vector<std::string> commonUrls;
+    commonUrls.reserve(urlPresence.size());
+    for (const auto &kv : urlPresence) {
+        if (static_cast<size_t>(kv.second) == needPresence) commonUrls.push_back(kv.first);
+    }
+
+    json urls_json = json::array();
+    std::unordered_set<std::string> commonSet(commonUrls.begin(), commonUrls.end());
+    // 1) Добавляем общие URL-страницы (совмещённые суммы по словам)
+    for (const std::string &url : commonUrls) {
+        int total = 0;
+        std::string snippet;
+        for (const auto &m : nonEmptyMaps) {
+            auto it = m.find(url);
+            if (it != m.end()) {
+                total += it->second.count;
+                if (snippet.empty()) snippet = it->second.snippet;
+            }
+        }
+        urls_json.push_back({{"url", url}, {"count", total}, {"content", snippet}, {"type", "common"}});
+    }
+    // 2) Добавляем остальные URL-страницы, комбинируя вклады всех слов на той же странице,
+    //    но исключая те URL, которые уже попали в "common"
+    struct Combined { int total = 0; std::string snippet; };
+    std::unordered_map<std::string, Combined> singles;
+    for (const auto &m : nonEmptyMaps) {
+        for (const auto &kv : m) {
+            const std::string &u = kv.first;
+            if (commonSet.find(u) != commonSet.end()) continue; // уже в общих
+            const auto &d = kv.second;
+            auto &dst = singles[u];
+            dst.total += d.count;
+            if (dst.snippet.empty()) dst.snippet = d.snippet;
+        }
+    }
+    for (const auto &kv : singles) {
+        const auto &s = kv.second;
+        const std::string &u = kv.first;
+        urls_json.push_back({{"url", u}, {"count", s.total}, {"content", s.snippet}, {"type", "single"}});
+    }
+
+    // Сортируем: сначала общие сайты по count, затем одиночные по count
+    std::stable_sort(urls_json.begin(), urls_json.end(), [](const json &a, const json &b) {
+        const bool a_common = a.value("type", "single") == std::string("common");
+        const bool b_common = b.value("type", "single") == std::string("common");
+        if (a_common != b_common) return a_common && !b_common;
+        return a.value("count", 0) > b.value("count", 0);
+    });
+    if (urls_json.size() > 20) {
+        json limited = json::array();
+        for (size_t i = 0; i < 20; ++i) limited.push_back(urls_json[i]);
+        urls_json = std::move(limited);
+    }
+
+    response = {{"status", "completed"}, {"urls", urls_json}};
     return response;
 }
 

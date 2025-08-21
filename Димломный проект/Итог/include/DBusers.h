@@ -35,6 +35,8 @@ public:
                          const std::string& column,
                          const std::string& value);
     json::json process_word_request(const std::string& word);
+    // Обработка запроса до 4 слов: суммирование по сайту/URL согласно правилам
+    json::json process_words_request(const std::string& query);
     json::json check_word_status(int word_id);
     bool save_word_url(int word_id,
                           const std::string &url,

@@ -136,6 +136,7 @@ add_executable(server
     src/server.cpp 
     src/DBusers.cpp
     src/word_tools.cpp
+    src/url_tools.cpp
 )
 target_link_libraries(server PRIVATE 
     Boost::boost

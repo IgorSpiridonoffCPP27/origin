@@ -15,12 +15,14 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
     
     try {
         if (req.method() == http::verb::post) {
-            if (req.target() == "/word_request") {
+            // Совместимость со старым путём и поддержка нового /api/*
+            auto target = std::string(req.target());
+            if (target == "/word_request" || target == "/api/word_request") {
                 auto body = nlohmann::json::parse(req.body());
-                std::string word = body["word"].get<std::string>();
+                std::string query = body["word"].get<std::string>();
                 
-                // Получаем данные из базы
-                auto result = db.process_word_request(word);
+                // Поддержка многословного запроса до 4 слов
+                auto result = db.process_words_request(query);
                 
                 // Форматируем ответ для нового интерфейса
                 if (result["status"] == "completed" && result.contains("urls")) {
@@ -43,7 +45,7 @@ void handle_request(DBuse& db, http::request<http::string_body>& req, http::resp
                 
                 res.result(http::status::ok);
             }
-            else if (req.target() == "/check_status") {
+            else if (target == "/check_status" || target == "/api/check_status") {
                 auto body = nlohmann::json::parse(req.body());
                 int word_id = body["word_id"].get<int>();
                 
