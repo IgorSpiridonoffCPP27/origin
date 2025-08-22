@@ -3,8 +3,7 @@
 #include "url_tools.h"
 #include <boost/beast/core/detail/base64.hpp>
 #include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string.hpp> // string split, tokenizer
-// #include <boost/tokenizer.hpp> // Убрано - больше не используется
+#include <boost/algorithm/string.hpp>
 #include "word_tools.h"
 #include <fstream>
 
@@ -87,8 +86,6 @@ static std::string ascii_lower_copy(const std::string& s)
     return r;
 }
 
-// Реализации методов Crawler (process_recursive, save_pages, monitor_new_words, download_page, count_word_occurrences, check_content)
-// [Здесь должна быть полная реализация методов класса Crawler из исходного кода]
 
 Crawler::~Crawler()
 {
@@ -99,7 +96,7 @@ void Crawler::start()
 {
     LOG("Starting crawler");
     running_ = true;
-    // Мониторинг новых слов отключен по требованиям
+    
 }
 
 void Crawler::stop()
@@ -110,14 +107,14 @@ void Crawler::stop()
     LOG("Stopping crawler...");
     running_ = false;
 
-    // Мониторинг отключен — потоки мониторинга не запускаются
+    
 
     pool_.join();
     LOG("Thread pool joined");
     LOG("Crawler stopped");
 }
 
-net::thread_pool &Crawler::get_pool() { return pool_; }
+
 
 std::string Crawler::prepare_wiki_url(const std::string &word)
 {
@@ -156,9 +153,8 @@ void Crawler::process_word(const std::string &word)
         }
 
         db_.execute_in_transaction([&](pqxx::work &txn)
-                                   { txn.exec_params(
-                                         "UPDATE words SET status = 'processing' WHERE id = $1",
-                                         word_id); });
+                                   { txn.exec(
+                                         "UPDATE words SET status = 'processing' WHERE id = " + txn.quote(word_id)); });
         std::vector<std::pair<std::string, std::string>> url_templates = {
             {"Start", config_.get("Crowler.start_page")},
             {"Wikipedia", "https://ru.wikipedia.org/wiki/" + prepare_wiki_url(word)}};
@@ -195,9 +191,8 @@ void Crawler::process_word(const std::string &word)
         }
 
         db_.execute_in_transaction([&](pqxx::work &txn)
-                                   { txn.exec_params(
-                                         "UPDATE words SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = $1",
-                                         word_id); });
+                                   { txn.exec(
+                                         "UPDATE words SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = " + txn.quote(word_id)); });
 
         if (!processed)
         {
@@ -343,7 +338,7 @@ void Crawler::process_recursive(const std::string &word,
 
     for (const auto &[url, html] : pages)
     {
-        // Используем boost::asio::post вместо executor().post()
+        
         futures.emplace_back(
             boost::asio::post(
                 pool_,

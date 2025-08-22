@@ -25,7 +25,7 @@ public:
     ~Crawler();
     void start();
     void stop();
-    net::thread_pool& get_pool();
+
     std::string prepare_wiki_url(const std::string& word);
     void process_word(const std::string& word);
 

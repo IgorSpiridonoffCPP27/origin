@@ -5,52 +5,7 @@
 #include <unicode/unistr.h>
 #include <cctype>
 
-static std::string to_lower_utf8(const std::string& s) {
-    std::string r;
-    r.reserve(s.size());
-    
-    for (size_t i = 0; i < s.size(); i++) {
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        
-        // ASCII латиница A-Z -> a-z
-        if (c >= 'A' && c <= 'Z') {
-            r.push_back(static_cast<char>(c + 32));
-        }
-        // Кириллица А-Я -> а-я (UTF-8 байты 0xD0 и 0xD1)
-        else if (c == 0xD0) {
-            // Первый байт UTF-8 для кириллицы А-Я
-            if (i + 1 < s.size()) {
-                unsigned char next_c = static_cast<unsigned char>(s[i + 1]);
-                if (next_c >= 0x90 && next_c <= 0xBF) { // А-Я
-                    r.push_back(static_cast<char>(0xD0));
-                    r.push_back(static_cast<char>(next_c + 0x20)); // +32 для перевода в нижний регистр
-                    i++; // Пропускаем следующий байт
-                    continue;
-                }
-            }
-            r.push_back(s[i]);
-        }
-        else if (c == 0xD1) {
-            // Первый байт UTF-8 для кириллицы А-Я (продолжение)
-            if (i + 1 < s.size()) {
-                unsigned char next_c = static_cast<unsigned char>(s[i + 1]);
-                if (next_c >= 0x80 && next_c <= 0x8F) { // А-Я (продолжение)
-                    r.push_back(static_cast<char>(0xD1));
-                    r.push_back(static_cast<char>(next_c + 0x20)); // +32 для перевода в нижний регистр
-                    i++; // Пропускаем следующий байт
-                    continue;
-                }
-            }
-            r.push_back(s[i]);
-        }
-        else {
-            // Все остальные символы копируем как есть
-            r.push_back(s[i]);
-        }
-    }
-    
-    return r;
-}
+
 
 // ICU-реализация: корректно понижает регистр для любых Unicode-символов
 static std::string to_lower_utf8_icu(const std::string& s) {

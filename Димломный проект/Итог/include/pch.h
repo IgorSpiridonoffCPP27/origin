@@ -15,6 +15,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/error.hpp>
 #define _WIN32_WINNT 0x0A00  // Windows 10
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 #include <fstream>
@@ -31,10 +32,7 @@
 #include <future>
 #include <condition_variable>
 #include <unordered_set>
-#include <boost/regex.hpp> // Добавляем в начале файла
 #include <boost/algorithm/string.hpp>
-#include <sw/redis++/redis++.h>
-#include <boost/asio/spawn.hpp>
 #include <tuple>      
 #include <functional>
 #include "config_parser.h"

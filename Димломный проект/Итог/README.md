@@ -1,44 +1,122 @@
-# Дипмломный проект
+# Краулер для анализа веб-страниц
+
+## Описание проекта
+
+Проект представляет собой систему для краулинга веб-страниц, анализа текстового содержимого и индексации слов в базе данных PostgreSQL. Система состоит из трех основных компонентов:
+
+1. **crowler** - основной краулер для обхода веб-страниц
+2. **server** - сервер API для работы с базой данных  
+3. **web_server** - веб-прокси с генерацией HTML
+
+## Архитектура
+
+- **C++20** - основной язык разработки
+- **Boost.Asio** - асинхронный I/O
+- **Boost.Beast** - HTTP/HTTPS
+- **PostgreSQL** - база данных
+- **Gumbo** - парсинг HTML
+- **OpenSSL** - SSL/TLS
+- **ICU** - Unicode поддержка
 
 ## Структура проекта
-.
-├── src/ # Исходные файлы
-│ ├── web_proxy.cpp # Основной прокси-сервер
-│ ├── crawler.cpp # Краулер для сбора данных
-│ ├── DBusers.cpp # Работа с базой данных
-│ ├── html_generator.cpp # Генератор HTML интерфейса
-│ ├── api_client.cpp # Клиент для API запросов
-│ ├── html_parser.cpp # Парсер HTML контента
-│ ├── url_tools.cpp # Утилиты для работы с URL
-│ ├── logger.cpp # Система логирования
-│ └── ... # Дополнительные модули
-├── include/ # Заголовочные файлы
-├── config/ # Конфигурационные файлы
-└── CMakeLists.txt # Файл сборки проекта
 
+```
+├── include/           # Заголовочные файлы
+├── src/              # Исходные файлы
+├── config.ini        # Конфигурация
+├── CMakeLists.txt    # Система сборки
+└── README.md         # Документация
+```
 
-## Настройка и запуск
+## Зависимости
 
-### Предварительные требования
-- Компилятор C++17 (GCC, Clang или MSVC)
-- Boost 1.70+
-- PostgreSQL 12+
-- libpqxx 7.0+
+- Boost 1.70+ (system, coroutine, context, date_time)
+- OpenSSL
+- libpqxx (PostgreSQL)
+- Gumbo (HTML парсер)
+- ICU (Unicode)
+- nlohmann/json (JSON)
 
-### Сборка проекта (Windows, Visual Studio 2022 x64)
+## Сборка
+
+### Требования
+- CMake 3.10+
+- Visual Studio 2019+ (Windows)
+- vcpkg с установленными зависимостями
+
+### Команды сборки
 ```bash
-# 1) Чистая конфигурация
-rd /s /q build 2>nul & mkdir build
+mkdir build
+cd build
+cmake .. -DCMAKE_TOOLCHAIN_FILE="D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+cmake --build . --config Release
+```
 
-# 2) Генерация под VS 2022 x64 с vcpkg toolchain
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+## Конфигурация
 
-# 3) Сборка
-cmake --build build --config Release
+Отредактируйте `config.ini` для настройки:
 
-### После сборки запуск .exe 
-server.exe
-web_proxy.exe
-crawler.exe
+```ini
+[Database]
+host=localhost
+port=5432
+dbname=HTTP
+user=postgres
+password=your_password
 
-#Подключаемся к web серверу по адресу localhost:8081
+[Crowler]
+start_page=https://example.com
+max_redirects=5
+recursion_depth=1
+max_connections=10
+max_links_per_page=1
+poll_interval=5
+
+[server]
+port=8080
+
+[DBusers]
+POOL_SIZE=5
+```
+
+## Использование
+
+1. **Настройте базу данных PostgreSQL**
+2. **Отредактируйте config.ini**
+3. **Запустите компоненты:**
+
+```bash
+# Краулер
+./Release/crowler.exe
+
+# API сервер  
+./Release/server.exe
+
+# Веб-прокси
+./Release/web_server.exe
+```
+
+## Функциональность
+
+### Краулер
+- Рекурсивный обход веб-страниц
+- Извлечение и индексация слов
+- Сохранение HTML и текстового содержимого
+- Фильтрация и нормализация слов
+
+### API Сервер
+- REST API для работы с базой данных
+- Поиск по словам и URL
+- Статистика и метаданные
+
+### Веб-прокси
+- Прокси-сервер с генерацией HTML
+- Веб-интерфейс для просмотра результатов
+
+## Подробная документация
+
+См. файл `PROJECT_DESCRIPTION.md` для детального описания каждого компонента и файла проекта.
+
+## Лицензия
+
+Проект разработан в рамках дипломной работы по программированию на C++.

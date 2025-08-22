@@ -41,7 +41,7 @@ http::response<http::string_body> call_api(
         http::response<http::string_body> res;
         http::read(stream, buffer, res);
 
-        // Исправление: правильное завершение соединения
+        
         beast::error_code ec;
         stream.socket().shutdown(tcp::socket::shutdown_send, ec);
 

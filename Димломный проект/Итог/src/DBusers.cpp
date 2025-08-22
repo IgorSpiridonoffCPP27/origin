@@ -234,7 +234,7 @@ void DBuse::execute_in_transaction(const std::function<void(pqxx::work &)> &func
             throw;
         }
     }
-    catch (const pqxx::broken_connection &e)
+    catch (const pqxx::broken_connection &)
     {
         // Повторная инициализация соединения при ошибке
         initialize_connection(wrapper);
@@ -271,11 +271,10 @@ json::json DBuse::get_columns(const std::string &table)
     json::json result;
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        pqxx::result cols = txn.exec_params(
+        pqxx::result cols = txn.exec(
             "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name=$1 AND (column_default IS NULL OR column_default NOT LIKE 'nextval%') "
-            "ORDER by ordinal_position", 
-            table);
+            "WHERE table_name=" + txn.quote(table) + " AND (column_default IS NULL OR column_default NOT LIKE 'nextval%') "
+            "ORDER by ordinal_position");
         
         for (auto row : cols) {
             result.push_back({
@@ -293,10 +292,9 @@ json::json DBuse::get_record(const std::string &table,
     json::json record;
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        pqxx::result result = txn.exec_params(
+        pqxx::result result = txn.exec(
             "SELECT * FROM " + txn.quote_name(table) + 
-            " WHERE " + txn.quote_name(column) + " = $1",
-            value);
+            " WHERE " + txn.quote_name(column) + " = " + txn.quote(value));
         
         if (result.empty()) {
             throw std::runtime_error("Record not found");
@@ -314,9 +312,8 @@ bool DBuse::check_auth(const std::string &username,
     bool auth_result = false;
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        auto res = txn.exec_params(
-            "SELECT 1 FROM users WHERE username=$1 AND password=$2", 
-            username, password);
+        auto res = txn.exec(
+            "SELECT 1 FROM users WHERE username=" + txn.quote(username) + " AND password=" + txn.quote(password));
         auth_result = !res.empty(); });
     return auth_result;
 }
@@ -338,16 +335,15 @@ void DBuse::insert_data(const std::string &table,
             for (const auto& [name, value] : values.items()) {
                 std::string val = value.is_string() ? value.get<std::string>() : value.dump();
                 
-                auto type_res = txn.exec_params(
+                auto type_res = txn.exec(
                     "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name=$1 AND column_name=$2",
-                    table, name);
+                    "WHERE table_name=" + txn.quote(table) + " AND column_name=" + txn.quote(name));
                 
                 if (!type_res.empty()) {
                     std::string type = type_res[0][0].as<std::string>();
                     if (type.find("char") != std::string::npos || type == "text") {
-                        auto check = txn.exec_params("SELECT * FROM " + txn.quote_name(table) + 
-                                   " WHERE " + txn.quote_name(name) + " = $1", val);
+                        auto check = txn.exec("SELECT * FROM " + txn.quote_name(table) + 
+                                   " WHERE " + txn.quote_name(name) + " = " + txn.quote(val));
                         if (!check.empty()) {
                             json::json existing_record;
                             for (const auto& field : check[0]) {
@@ -390,7 +386,7 @@ void DBuse::insert_data(const std::string &table,
 
             query += values_part + ") RETURNING *";
             
-            auto result = txn.exec_params(query, values_list);
+            auto result = txn.exec(query);
             if (!result.empty()) {
                 json::json new_record;
                 for (const auto& field : result[0]) {
@@ -467,7 +463,7 @@ void DBuse::run_migrations() {
             if (!url_type.empty() && url_type[0][0].as<std::string>().find("char") != std::string::npos) {
                 txn.exec("ALTER TABLE word_urls ALTER COLUMN url TYPE TEXT");
             }
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             throw;
         }
     });
@@ -484,20 +480,18 @@ bool DBuse::save_word_url(int word_id,
         std::string safe_html = sanitize_utf8(html_content);
         std::string safe_text = sanitize_utf8(text_content);
         boost::algorithm::trim(safe_url);
-        txn.exec_params(
+        txn.exec(
             "INSERT INTO word_urls (word_id, url, html_content, text_content, word_count) "
-            "VALUES ($1, $2, $3, $4, $5) "
+            "VALUES (" + txn.quote(word_id) + ", " + txn.quote(safe_url) + ", " + txn.quote(safe_html) + ", " + txn.quote(safe_text) + ", " + txn.quote(word_count) + ") "
             "ON CONFLICT (word_id, url) DO UPDATE "
             "SET html_content = EXCLUDED.html_content, "
             "    text_content = EXCLUDED.text_content, "
-            "    word_count = EXCLUDED.word_count",
-            word_id, safe_url, safe_html, safe_text, word_count);
+            "    word_count = EXCLUDED.word_count");
         saved = true;
         
         // Обновляем время последнего изменения для отслеживания прогресса
-        txn.exec_params(
-            "UPDATE words SET processed_at = CURRENT_TIMESTAMP WHERE id = $1",
-            word_id);
+        txn.exec(
+            "UPDATE words SET processed_at = CURRENT_TIMESTAMP WHERE id = " + txn.quote(word_id));
     });
     return saved;
 }
@@ -509,9 +503,8 @@ int DBuse::get_word_id(const std::string &word)
                            {
         std::string w = sanitize_utf8(word);
         boost::algorithm::trim(w);
-        auto result = txn.exec_params(
-            "SELECT id FROM words WHERE word = $1", 
-            w);
+        auto result = txn.exec(
+            "SELECT id FROM words WHERE word = " + txn.quote(w));
         if (!result.empty()) {
             word_id = result[0][0].as<int>();
         } });
@@ -525,9 +518,8 @@ bool DBuse::url_exists_for_word(int word_id, const std::string &url)
                            {
         std::string safe_url = sanitize_utf8(url);
         boost::algorithm::trim(safe_url);
-        auto result = txn.exec_params(
-            "SELECT 1 FROM word_urls WHERE word_id = $1 AND url = $2 LIMIT 1",
-            word_id, safe_url);
+        auto result = txn.exec(
+            "SELECT 1 FROM word_urls WHERE word_id = " + txn.quote(word_id) + " AND url = " + txn.quote(safe_url) + " LIMIT 1");
         exists = !result.empty(); });
     return exists;
 }
@@ -539,9 +531,8 @@ bool DBuse::url_exists_any(const std::string &url)
                            {
         std::string safe_url = sanitize_utf8(url);
         boost::algorithm::trim(safe_url);
-        auto result = txn.exec_params(
-            "SELECT 1 FROM word_urls WHERE url = $1 LIMIT 1",
-            safe_url);
+        auto result = txn.exec(
+            "SELECT 1 FROM word_urls WHERE url = " + txn.quote(safe_url) + " LIMIT 1");
         exists = !result.empty(); });
     return exists;
 }
@@ -569,9 +560,8 @@ std::vector<std::pair<int, std::string>> DBuse::get_new_words_since(int last_id)
     std::vector<std::pair<int, std::string>> new_words;
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        auto result = txn.exec_params(
-            "SELECT id, word FROM words WHERE id > $1 ORDER BY id", 
-            last_id);
+        auto result = txn.exec(
+            "SELECT id, word FROM words WHERE id > " + txn.quote(last_id) + " ORDER BY id");
         for (auto row : result) {
             new_words.emplace_back(
                 row["id"].as<int>(),
@@ -595,9 +585,8 @@ std::string DBuse::get_full_word_string(const std::string &word)
     std::string result;
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        auto res = txn.exec_params(
-            "SELECT word FROM words WHERE word = $1", 
-            word);
+        auto res = txn.exec(
+            "SELECT word FROM words WHERE word = " + txn.quote(word));
         if (!res.empty()) {
             result = res[0][0].as<std::string>();
         } });
@@ -617,7 +606,7 @@ void DBuse::add_word_to_tables(const std::string &word)
     // Проверка на дубликат
     bool exists = false;
     execute_in_transaction([&](pqxx::work &txn) {
-        pqxx::result res = txn.exec_params("SELECT id FROM words WHERE word = $1", w);
+        pqxx::result res = txn.exec("SELECT id FROM words WHERE word = " + txn.quote(w));
         exists = !res.empty();
     });
     if (exists) {
@@ -628,12 +617,11 @@ void DBuse::add_word_to_tables(const std::string &word)
     execute_in_transaction([&](pqxx::work &txn)
                            {
         try {
-            auto result = txn.exec_params(
-                "INSERT INTO words (word) VALUES ($1) RETURNING id",
-                w);
+            auto result = txn.exec(
+                "INSERT INTO words (word) VALUES (" + txn.quote(w) + ") RETURNING id");
             std::cout << "[DEBUG] Слово '" << w << "' успешно добавлено в базу" << std::endl;
-        } catch (const std::exception &e) {
-            std::cerr << "Ошибка при добавлении слова: " << e.what() << std::endl;
+        } catch (const std::exception &) {
+            std::cerr << "Ошибка при добавлении слова" << std::endl;
         }
     });
 }
@@ -644,17 +632,15 @@ json::json DBuse::process_word_request(const std::string &word)
 
     execute_in_transaction([&](pqxx::work &txn)
                            {
-        pqxx::result word_result = txn.exec_params(
-            "SELECT id FROM words WHERE word = $1", 
-            word);
+        pqxx::result word_result = txn.exec(
+            "SELECT id FROM words WHERE word = " + txn.quote(word));
 
         if (!word_result.empty()) {
             int word_id = word_result[0][0].as<int>();
 
-            pqxx::result urls_result = txn.exec_params(
+            pqxx::result urls_result = txn.exec(
                 "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls "
-                "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
-                word_id);
+                "WHERE word_id = " + txn.quote(word_id) + " ORDER BY word_count DESC LIMIT 10");
 
             json::json urls_json = json::json::array();
             for (auto row : urls_result) {
@@ -736,7 +722,7 @@ json::json DBuse::process_words_request(const std::string &query)
     if (valid_words.size() == 1) {
         auto single = process_word_request(valid_words[0]);
         if (single.value("status", "") == std::string("not_found")) {
-            return json{{"status", "not_found"}, {"message", std::string("Искомое ") + query + " не найдено"}};
+            return json{{"status", "not_found"}, {"message", std::string("Искомое '") + query + "' не найдено"}};
         }
         return single;
     }
@@ -751,7 +737,7 @@ json::json DBuse::process_words_request(const std::string &query)
 
     execute_in_transaction([&](pqxx::work &txn) {
         for (const auto &w : valid_words) {
-            pqxx::result word_result = txn.exec_params("SELECT id FROM words WHERE word = $1", w);
+            pqxx::result word_result = txn.exec("SELECT id FROM words WHERE word = " + txn.quote(w));
             if (word_result.empty()) {
                 perWordUrlMaps.emplace_back();
                 continue;
@@ -759,9 +745,8 @@ json::json DBuse::process_words_request(const std::string &query)
             int word_id = word_result[0][0].as<int>();
             found_word_ids.push_back(word_id);
 
-            pqxx::result urls_result = txn.exec_params(
-                "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls WHERE word_id = $1",
-                word_id);
+            pqxx::result urls_result = txn.exec(
+                "SELECT url, LEFT(text_content, 200) AS snippet, word_count FROM word_urls WHERE word_id = " + txn.quote(word_id));
 
             std::unordered_map<std::string, UrlData> urlMap;
             urlMap.reserve(urls_result.size());
@@ -852,19 +837,17 @@ json::json DBuse::check_word_status(int word_id) {
     json::json response;
     
     execute_in_transaction([&](pqxx::work& txn) {
-        auto result = txn.exec_params(
-            "SELECT status FROM words WHERE id = $1",
-            word_id);
+        auto result = txn.exec(
+            "SELECT status FROM words WHERE id = " + txn.quote(word_id));
         
         if (!result.empty()) {
             std::string status = result[0][0].as<std::string>();
             response["status"] = status;
             
             // Всегда возвращаем текущие результаты, даже если обработка не завершена
-            pqxx::result urls_result = txn.exec_params(
+            pqxx::result urls_result = txn.exec(
                 "SELECT url, text_content, word_count FROM word_urls "
-                "WHERE word_id = $1 ORDER BY word_count DESC LIMIT 10",
-                word_id);
+                "WHERE word_id = " + txn.quote(word_id) + " ORDER BY word_count DESC LIMIT 10");
             
             json::json urls_json;
             for (auto row : urls_result) {
@@ -888,10 +871,9 @@ void DBuse::check_column_exists(pqxx::work &txn,
                                 const std::string &table,
                                 const std::string &column)
 {
-    auto res = txn.exec_params(
+    auto res = txn.exec(
         "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name=$1 AND column_name=$2",
-        table, column);
+        "WHERE table_name=" + txn.quote(table) + " AND column_name=" + txn.quote(column));
 
     if (res.empty())
     {
