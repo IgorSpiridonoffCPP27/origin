@@ -691,7 +691,7 @@ json::json DBuse::process_words_request(const std::string &query)
     size_t word_count = 0;
     for (const auto &p : raw_parts) if (!p.empty()) ++word_count;
     if (word_count > 4) {
-        return json{{"status", "not_found"}, {"message", "Запрос ограничен: поддерживается не более 4 слов. Для поиска по большему количеству слов используйте менее общий запрос."}};
+        return json{{"status", "not_found"}, {"message", "По запросу \"" + query + "\" ограничение на ввод, не более 4 слов"}};
     }
     std::vector<std::string> words;
     for (const auto &p : raw_parts) {
