@@ -3,6 +3,7 @@
 #include <boost/algorithm/string.hpp>
 #include <iostream> // Added for debug output
 #include <unicode/unistr.h>
+#include <cctype>
 
 static std::string to_lower_utf8(const std::string& s) {
     std::string r;
@@ -107,6 +108,18 @@ static bool is_valid_word_char(char c) {
     return uc > 127;
 }
 
+// Проверяет, является ли строка числом (только цифры)
+static bool is_number(const std::string& str) {
+    if (str.empty()) return false;
+    
+    for (char c : str) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool filter_and_normalize_word(std::string& word) {
     std::string original = word;
     boost::algorithm::trim(word);
@@ -121,14 +134,20 @@ bool filter_and_normalize_word(std::string& word) {
         boost::algorithm::replace_all(word, q, "");
     }
     
-    // Приводим к нижнему регистру все буквы (ICU)
-    word = to_lower_utf8_icu(word);
-    
     // Проверяем длину
     if (word.length() < 4 || word.length() > 31) {
         std::cout << "[DEBUG] Слово '" << original << "' -> '" << word << "' отфильтровано по длине (" << word.length() << ")" << std::endl;
         return false;
     }
+    
+    // Проверяем, является ли строка числом
+    if (is_number(word)) {
+        std::cout << "[DEBUG] Число '" << original << "' -> '" << word << "' прошло фильтрацию" << std::endl;
+        return true;
+    }
+    
+    // Приводим к нижнему регистру все буквы (ICU)
+    word = to_lower_utf8_icu(word);
     
     // Проверяем, что слово содержит хотя бы одну букву (латиница или кириллица)
     bool has_letter = false;

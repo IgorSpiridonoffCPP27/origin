@@ -588,12 +588,25 @@ std::unordered_map<std::string, int> Crawler::compute_word_counts(const std::str
     
     int total_tokens = 0;
     int filtered_tokens = 0;
+    int number_tokens = 0;
     
     for (const auto &word : words) {
         total_tokens++;
         std::string normalized_word = word;
         if (filter_and_normalize_word(normalized_word)) {
             counts[normalized_word] += 1;
+            // Проверяем, является ли это числом
+            bool is_num = true;
+            for (char c : normalized_word) {
+                if (!std::isdigit(static_cast<unsigned char>(c))) {
+                    is_num = false;
+                    break;
+                }
+            }
+            if (is_num) {
+                number_tokens++;
+                std::cout << "[DEBUG] Найдено число: '" << normalized_word << "' (" << normalized_word.length() << " символов)" << std::endl;
+            }
         } else {
             filtered_tokens++;
             if (filtered_tokens <= 10) { // Показываем первые 10 отфильтрованных слов
@@ -602,7 +615,8 @@ std::unordered_map<std::string, int> Crawler::compute_word_counts(const std::str
         }
     }
     
-    std::cout << "[DEBUG] Всего токенов: " << total_tokens << ", отфильтровано: " << filtered_tokens << ", добавлено: " << counts.size() << std::endl;
+    std::cout << "[DEBUG] Всего токенов: " << total_tokens << ", отфильтровано: " << filtered_tokens 
+              << ", добавлено: " << counts.size() << ", чисел: " << number_tokens << std::endl;
     
     return counts;
 }
