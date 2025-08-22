@@ -688,8 +688,10 @@ json::json DBuse::process_words_request(const std::string &query)
     // Парсинг до 4 слов
     std::vector<std::string> raw_parts;
     boost::split(raw_parts, query, boost::is_any_of(" \t\n\r"), boost::token_compress_on);
-    if (raw_parts.size() > 4) {
-        return json{{"status", "not_found"}, {"message", "Запрос должен содержать не более 4 слов"}};
+    size_t word_count = 0;
+    for (const auto &p : raw_parts) if (!p.empty()) ++word_count;
+    if (word_count > 4) {
+        return json{{"status", "not_found"}, {"message", "Запрос ограничен: поддерживается не более 4 слов. Для поиска по большему количеству слов используйте менее общий запрос."}};
     }
     std::vector<std::string> words;
     for (const auto &p : raw_parts) {
@@ -792,22 +794,27 @@ json::json DBuse::process_words_request(const std::string &query)
     }
     // 2) Добавляем остальные URL-страницы, комбинируя вклады всех слов на той же странице,
     //    но исключая те URL, которые уже попали в "common"
-    struct Combined { int total = 0; std::string snippet; };
+    struct Combined { int total = 0; std::string snippet; int word_hits = 0; };
     std::unordered_map<std::string, Combined> singles;
     for (const auto &m : nonEmptyMaps) {
         for (const auto &kv : m) {
             const std::string &u = kv.first;
             if (commonSet.find(u) != commonSet.end()) continue; // уже в общих
-            const auto &d = kv.second;
             auto &dst = singles[u];
-            dst.total += d.count;
-            if (dst.snippet.empty()) dst.snippet = d.snippet;
+            dst.total += kv.second.count;
+            dst.word_hits += 1;
+            if (dst.snippet.empty()) dst.snippet = kv.second.snippet;
         }
     }
+    // Убираем дубликаты по URL и добавляем в результат только те, которые встречаются по двум и более словам
+    std::unordered_set<std::string> added_urls;
     for (const auto &kv : singles) {
         const auto &s = kv.second;
         const std::string &u = kv.first;
-        urls_json.push_back({{"url", u}, {"count", s.total}, {"content", s.snippet}, {"type", "single"}});
+        if (added_urls.find(u) == added_urls.end() && s.word_hits > 1) {
+            urls_json.push_back({{"url", u}, {"count", s.total}, {"content", s.snippet}, {"type", "single"}});
+            added_urls.insert(u);
+        }
     }
 
     // Сортируем: сначала общие сайты по count, затем одиночные по count
@@ -817,11 +824,7 @@ json::json DBuse::process_words_request(const std::string &query)
         if (a_common != b_common) return a_common && !b_common;
         return a.value("count", 0) > b.value("count", 0);
     });
-    if (urls_json.size() > 20) {
-        json limited = json::array();
-        for (size_t i = 0; i < 20; ++i) limited.push_back(urls_json[i]);
-        urls_json = std::move(limited);
-    }
+    // Убираем ограничение на количество результатов - показываем все доступные страницы
 
     response = {{"status", "completed"}, {"urls", urls_json}};
     return response;
