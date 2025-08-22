@@ -99,15 +99,7 @@ void Crawler::start()
 {
     LOG("Starting crawler");
     running_ = true;
-    monitor_thread_ = std::thread([this]()
-                                  {
-            LOG("Monitor thread started");
-            try {
-                monitor_new_words();
-            } catch (const std::exception& e) {
-                LOG("Monitor thread exception: " + std::string(e.what()));
-            }
-            LOG("Monitor thread exiting"); });
+    // Мониторинг новых слов отключен по требованиям
 }
 
 void Crawler::stop()
@@ -118,11 +110,7 @@ void Crawler::stop()
     LOG("Stopping crawler...");
     running_ = false;
 
-    if (monitor_thread_.joinable())
-    {
-        monitor_thread_.join();
-        LOG("Monitor thread joined");
-    }
+    // Мониторинг отключен — потоки мониторинга не запускаются
 
     pool_.join();
     LOG("Thread pool joined");
@@ -232,10 +220,61 @@ void Crawler::crawl_start_url()
             LOG("Start URL is empty in config");
             return;
         }
+        
+        LOG("Проверяем стартовый URL: " + start_url);
+        LOG("Глубина рекурсии: " + std::to_string(config_.recursion_depth));
+        LOG("Максимум ссылок на странице: " + std::to_string(config_.max_links_per_page));
+        
+        // Проверка: если стартовый URL уже есть в базе — пропускаем индексирование
+        if (db_.url_exists_any(start_url)) {
+            LOG("Start URL already indexed in DB, skipping: " + start_url);
+            
+            if (config_.recursion_depth >= 1) {
+                LOG("Глубина рекурсии >= 1, собираем ссылки со страницы...");
+                // Скачиваем страницу для извлечения ссылок, но не индексируем слова
+                auto result = download_page(start_url);
+                if (!result.ec && !result.html.empty()) {
+                    std::vector<std::string> links = HtmlParser::extract_links(result.html, start_url);
+                    LOG("Найдено ссылок на странице: " + std::to_string(links.size()));
+                    
+                    int processed_links = 0;
+                    for (const auto& link : links) {
+                        if (processed_links >= config_.max_links_per_page) {
+                            LOG("Достигнут лимит ссылок на странице: " + std::to_string(config_.max_links_per_page));
+                            break;
+                        }
+                        
+                        if (db_.url_exists_any(link)) {
+                            LOG("Ссылка уже в БД, пропускаем: " + link);
+                            continue;
+                        }
+                        
+                        LOG("Обрабатываем новую ссылку: " + link);
+                        auto link_result = download_page(link);
+                        if (!link_result.ec && !link_result.html.empty()) {
+                            std::vector<std::pair<std::string, std::string>> pages = {{link_result.final_url, link_result.html}};
+                            crawl_recursive(pages, 0);
+                            processed_links++;
+                        } else {
+                            LOG("Не удалось скачать ссылку: " + link);
+                        }
+                    }
+                    LOG("Обработано новых ссылок: " + std::to_string(processed_links));
+                } else {
+                    LOG("Не удалось скачать стартовую страницу для извлечения ссылок");
+                }
+            } else {
+                LOG("Глубина рекурсии = 0, пропускаем обработку ссылок");
+            }
+            return;
+        }
+        
+        LOG("Стартовый URL новый, начинаем индексирование...");
         auto result = download_page(start_url);
         if (!result.ec && !result.html.empty()) {
             std::vector<std::pair<std::string, std::string>> pages = {{result.final_url, result.html}};
             crawl_recursive(pages, 0);
+            LOG("Индексирование стартовой страницы завершено");
         } else {
             LOG("Failed to download start URL: " + start_url);
         }
@@ -258,6 +297,14 @@ void Crawler::crawl_url(const std::string &url)
     } catch (const std::exception& e) {
         LOG(std::string("crawl_url exception: ") + e.what());
     }
+}
+
+void Crawler::update_config(const CrawlerConfig& new_config)
+{
+    config_ = new_config;
+    LOG("Конфигурация краулера обновлена");
+    LOG("Новая глубина рекурсии: " + std::to_string(config_.recursion_depth));
+    LOG("Новый стартовый URL: " + config_.get("Crowler.start_page"));
 }
 
 void Crawler::process_recursive(const std::string &word,
@@ -302,7 +349,7 @@ void Crawler::process_recursive(const std::string &word,
                 pool_,
                 std::packaged_task<void()>([&, url, html]()
                                            {
-                    auto links = HtmlParser::extract_links(html, url);
+                    std::vector<std::string> links = HtmlParser::extract_links(html, url);
                     LOG("Found " + std::to_string(links.size()) + " links at: " + url);
                     
                     std::string current_host = get_host(url);
@@ -318,6 +365,11 @@ void Crawler::process_recursive(const std::string &word,
                         
                         if (visited_urls_.contains(link)) {
                             LOG("Skipping visited URL: " + link);
+                            continue;
+                        }
+                        // Пропускаем, если URL уже присутствует в БД независимо от слова
+                        if (db_.url_exists_any(link)) {
+                            LOG("Skipping URL already in DB (any): " + link);
                             continue;
                         }
                         
@@ -407,8 +459,15 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
 
     save_pages_all_words(pages);
 
+    // Проверяем глубину рекурсии
     if (current_depth >= config_.recursion_depth) {
         LOG("Max recursion depth reached (all words): " + std::to_string(current_depth));
+        return;
+    }
+
+    // Если глубина = 0, не обрабатываем ссылки
+    if (config_.recursion_depth == 0) {
+        LOG("Глубина рекурсии = 0, не обрабатываем ссылки");
         return;
     }
 
@@ -421,13 +480,8 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
             boost::asio::post(
                 pool_,
                 std::packaged_task<void()>([&, url, html]() {
-                    auto links = HtmlParser::extract_links(html, url);
+                    std::vector<std::string> links = HtmlParser::extract_links(html, url);
                     LOG("[ALL] Found " + std::to_string(links.size()) + " links at: " + url);
-                    
-                    // Детальное логирование всех найденных ссылок
-                    for (const auto& link : links) {
-                        LOG("[ALL] Raw link found: " + link);
-                    }
 
                     std::string current_host = get_host(url);
                     int links_processed = 0;
@@ -443,8 +497,15 @@ void Crawler::crawl_recursive(const std::vector<std::pair<std::string, std::stri
                             continue;
                         }
 
+                        // Проверяем, не посещали ли мы уже эту ссылку
                         if (visited_urls_.contains(link)) {
                             LOG("[ALL] Skipping visited URL: " + link);
+                            continue;
+                        }
+
+                        // Проверяем, не обрабатывали ли мы уже эту ссылку в БД
+                        if (db_.url_exists_any(link)) {
+                            LOG("[ALL] Skipping URL already in DB: " + link);
                             continue;
                         }
 

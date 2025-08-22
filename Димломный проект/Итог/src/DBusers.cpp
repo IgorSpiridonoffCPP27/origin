@@ -532,6 +532,20 @@ bool DBuse::url_exists_for_word(int word_id, const std::string &url)
     return exists;
 }
 
+bool DBuse::url_exists_any(const std::string &url)
+{
+    bool exists = false;
+    execute_in_transaction([&](pqxx::work &txn)
+                           {
+        std::string safe_url = sanitize_utf8(url);
+        boost::algorithm::trim(safe_url);
+        auto result = txn.exec_params(
+            "SELECT 1 FROM word_urls WHERE url = $1 LIMIT 1",
+            safe_url);
+        exists = !result.empty(); });
+    return exists;
+}
+
 void DBuse::add_unique_constraint()
 {
     // Теперь UNIQUE constraint добавляется сразу при создании таблицы
@@ -668,7 +682,7 @@ json::json DBuse::process_word_request(const std::string &word)
             // Не создаем новое слово автоматически. Возвращаем что не найдено
             response = {
                 {"status", "not_found"},
-                {"message", "Слово отсутствует в индексе"}
+                {"message", std::string("Искомое '") + word + "' не найдено"}
             };
         } });
 
@@ -720,7 +734,11 @@ json::json DBuse::process_words_request(const std::string &query)
 
     // Особый случай: одно слово — возвращаем страницы (URL), как раньше
     if (valid_words.size() == 1) {
-        return process_word_request(valid_words[0]);
+        auto single = process_word_request(valid_words[0]);
+        if (single.value("status", "") == std::string("not_found")) {
+            return json{{"status", "not_found"}, {"message", std::string("Искомое ") + query + " не найдено"}};
+        }
+        return single;
     }
 
     struct UrlData { int count; std::string snippet; };
@@ -762,7 +780,7 @@ json::json DBuse::process_words_request(const std::string &query)
     for (auto &m : perWordUrlMaps) if (!m.empty()) nonEmptyMaps.push_back(std::move(m));
 
     if (nonEmptyMaps.empty()) {
-        return json{{"status", "not_found"}, {"message", "Слова отсутствуют в индексе"}};
+        return json{{"status", "not_found"}, {"message", std::string("Искомые ") + query + " не найдены"}};
     }
 
     // Проверяем наличие общих страниц (URL) у всех найденных слов

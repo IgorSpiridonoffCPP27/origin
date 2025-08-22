@@ -50,6 +50,8 @@ public:
     void add_word_to_tables(const std::string& word);
     int get_word_id(const std::string& word);
     bool url_exists_for_word(int word_id, const std::string& url);
+    // Проверка существования URL вне зависимости от слова
+    bool url_exists_any(const std::string& url);
     std::string get_full_word_string(const std::string& word);
     std::vector<std::string> get_all_words();
     std::vector<std::pair<int, std::string>> get_new_words_since(int last_id);

@@ -32,6 +32,7 @@ public:
     // New crawling mode: start from a URL and index all words on pages
     void crawl_url(const std::string& url);
     void crawl_start_url();
+    void update_config(const CrawlerConfig& new_config);
 
 private:
     struct DownloadResult {
